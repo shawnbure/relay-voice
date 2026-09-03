@@ -38,7 +38,7 @@ struct DialerView: View {
                 }.frame(maxWidth: .infinity)
                 Spacer(minLength: 18)
                 if voice.isInCall {
-                    HStack(spacing: 28) { CallControl(title: "Mute", icon: voice.muted ? "mic.slash.fill" : "mic.fill", active: voice.muted) { voice.toggleMute() }; CallControl(title: "Hold", icon: "pause.fill", active: voice.status == .held) { voice.toggleHold() }; CallControl(title: "Speaker", icon: "speaker.wave.2.fill", active: voice.speaker) { voice.toggleSpeaker() } }
+                    HStack(spacing: 28) { CallControl(title: "Mute", icon: voice.muted ? "mic.slash.fill" : "mic.fill", active: voice.muted) { voice.toggleMute() }; CallControl(title: "Hold", icon: "pause.fill", active: voice.status == .held) { voice.toggleHold() }; AudioRouteControl() }
                     Button { voice.hangup() } label: { Image(systemName: "phone.down.fill").font(.title2.bold()).frame(width: 72, height: 72).background(.red).foregroundStyle(.white).clipShape(Circle()) }.accessibilityLabel("Hang up").padding(.top, 12)
                 } else {
                     HStack(spacing: 54) {
@@ -49,6 +49,26 @@ struct DialerView: View {
                 Spacer(minLength: 18)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.navigationTitle("Keypad").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct AudioRouteControl: View {
+    @EnvironmentObject private var voice: VoiceManager
+    private var selected: VoiceManager.AudioRoute { voice.audioRoutes.first { $0.id == voice.selectedAudioRouteID } ?? voice.audioRoutes[0] }
+    var body: some View {
+        Menu {
+            ForEach(voice.audioRoutes) { route in
+                Button { voice.selectAudioRoute(route) } label: { Label(route.name, systemImage: route.id == voice.selectedAudioRouteID ? "checkmark" : route.icon) }
+            }
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: selected.icon).font(.title2.bold()).frame(width: 58, height: 58)
+                    .background(voice.selectedAudioRouteID == "receiver" ? Color(.secondarySystemBackground) : relayGreen)
+                    .foregroundStyle(voice.selectedAudioRouteID == "receiver" ? Color.primary : relayInk).clipShape(Circle())
+                    .overlay(Circle().stroke(voice.selectedAudioRouteID == "receiver" ? Color(.separator) : relayInk.opacity(0.7), lineWidth: voice.selectedAudioRouteID == "receiver" ? 1 : 2.5))
+                Text(selected.name).font(.caption.weight(voice.selectedAudioRouteID == "receiver" ? .regular : .bold)).lineLimit(1).frame(maxWidth: 72)
+            }
+        }.accessibilityLabel("Audio output").accessibilityValue(selected.name)
     }
 }
 

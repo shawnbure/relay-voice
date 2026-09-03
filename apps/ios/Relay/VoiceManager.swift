@@ -7,6 +7,11 @@ import UIKit
 
 @MainActor
 final class VoiceManager: NSObject, ObservableObject {
+    struct AudioRoute: Identifiable, Equatable {
+        enum Kind { case receiver, speaker, bluetooth }
+        let id: String; let name: String; let kind: Kind
+        var icon: String { switch kind { case .receiver: "iphone"; case .speaker: "speaker.wave.2.fill"; case .bluetooth: "wave.3.right" } }
+    }
     enum Status: Equatable { case offline, connecting, ready, ringing, active, held, ending, failed(String) }
     @Published var status: Status = .offline
     @Published var remoteNumber = ""
@@ -15,6 +20,8 @@ final class VoiceManager: NSObject, ObservableObject {
     @Published var speaker = false
     @Published private(set) var incoming = false
     @Published private(set) var hasCall = false
+    @Published private(set) var audioRoutes = [AudioRoute(id: "receiver", name: "iPhone", kind: .receiver), AudioRoute(id: "speaker", name: "Speaker", kind: .speaker)]
+    @Published private(set) var selectedAudioRouteID = "receiver"
 
     var isInCall: Bool { hasCall }
     var isCallActive: Bool { status == .active || status == .held }
@@ -32,6 +39,7 @@ final class VoiceManager: NSObject, ObservableObject {
     private var reportedIncomingCalls = Set<UUID>()
     private var reconnectTask: Task<Void, Never>?
     private var reconnectDelay: TimeInterval = 2
+    private var audioRouteObserver: NSObjectProtocol?
 
     override init() {
         let configuration = CXProviderConfiguration(localizedName: "Relay")
@@ -43,6 +51,7 @@ final class VoiceManager: NSObject, ObservableObject {
         super.init()
         client.delegate = self; provider.setDelegate(self, queue: .main)
         let registry = PKPushRegistry(queue: .main); registry.delegate = self; registry.desiredPushTypes = [.voIP]; self.registry = registry
+        audioRouteObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.refreshAudioRoutes() } }
     }
 
     func connect(api: RelayAPI, ownNumber: String) async {
@@ -77,6 +86,20 @@ final class VoiceManager: NSObject, ObservableObject {
     }
     func toggleMute() { muted.toggle(); muted ? call?.muteAudio() : call?.unmuteAudio() }
     func toggleSpeaker() { speaker.toggle(); try? AVAudioSession.sharedInstance().overrideOutputAudioPort(speaker ? .speaker : .none) }
+    func selectAudioRoute(_ route: AudioRoute) {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            switch route.kind {
+            case .speaker:
+                try session.setPreferredInput(session.availableInputs?.first { $0.portType == .builtInMic }); try session.overrideOutputAudioPort(.speaker)
+            case .receiver:
+                try session.overrideOutputAudioPort(.none); try session.setPreferredInput(session.availableInputs?.first { $0.portType == .builtInMic })
+            case .bluetooth:
+                try session.overrideOutputAudioPort(.none); try session.setPreferredInput(session.availableInputs?.first { $0.uid == route.id })
+            }
+            refreshAudioRoutes()
+        } catch { status = .failed("Audio route unavailable: \(error.localizedDescription)") }
+    }
     func toggleHold() { guard let call else { return }; if status == .held { call.unhold() } else { call.hold() } }
 
     private var pushEnvironment: PushEnvironment {
@@ -114,6 +137,16 @@ final class VoiceManager: NSObject, ObservableObject {
             self.reconnectTask = nil; self.status = .offline
             await self.connect(api: api, ownNumber: self.ownNumber)
         }
+    }
+    private func refreshAudioRoutes() {
+        let session = AVAudioSession.sharedInstance()
+        var routes = [AudioRoute(id: "receiver", name: UIDevice.current.model, kind: .receiver), AudioRoute(id: "speaker", name: "Speaker", kind: .speaker)]
+        routes += (session.availableInputs ?? []).filter { [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE].contains($0.portType) }.map { AudioRoute(id: $0.uid, name: $0.portName, kind: .bluetooth) }
+        audioRoutes = routes
+        guard let output = session.currentRoute.outputs.first else { selectedAudioRouteID = "receiver"; speaker = false; return }
+        if output.portType == .builtInSpeaker { selectedAudioRouteID = "speaker"; speaker = true }
+        else if [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE].contains(output.portType) { selectedAudioRouteID = routes.first(where: { $0.kind == .bluetooth && $0.name == output.portName })?.id ?? "receiver"; speaker = false }
+        else { selectedAudioRouteID = "receiver"; speaker = false }
     }
 }
 
@@ -169,7 +202,7 @@ extension VoiceManager: CXProviderDelegate {
     nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) { Task { @MainActor in self.call?.hangup(); self.finish(); action.fulfill() } }
     nonisolated func provider(_ provider: CXProvider, perform action: CXPlayDTMFCallAction) { Task { @MainActor in self.sendDTMF(action.digits); action.fulfill() } }
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) { Task { @MainActor in if action.isOnHold { self.call?.hold() } else { self.call?.unhold() }; action.fulfill() } }
-    nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) { Task { @MainActor in self.client.enableAudioSession(audioSession: audioSession) } }
+    nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) { Task { @MainActor in self.client.enableAudioSession(audioSession: audioSession); self.refreshAudioRoutes() } }
     nonisolated func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) { Task { @MainActor in self.client.disableAudioSession(audioSession: audioSession) } }
 }
 
