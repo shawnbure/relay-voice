@@ -26,6 +26,9 @@ struct RelaySettings: Codable {
 }
 struct DataEnvelope<T: Decodable>: Decodable { let data: T }
 struct VoiceToken: Decodable { let token: String; let expiresIn: Int; let selfTarget: String }
+struct OutgoingAttachment {
+    let name: String; let contentType: String; let data: Data
+}
 
 extension JSONDecoder {
     static var relay: JSONDecoder {

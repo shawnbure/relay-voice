@@ -1,5 +1,7 @@
 import AVFoundation
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 private let relayGreen = Color(red: 0.74, green: 0.96, blue: 0.29)
 private let relayInk = Color(red: 0.09, green: 0.13, blue: 0.10)
@@ -87,16 +89,98 @@ private struct ThreadView: View {
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
     @State private var activity: [ActivityItem] = []; @State private var draft = ""; @State private var sending = false
+    @State private var attachment: OutgoingAttachment?
+    @State private var photoItem: PhotosPickerItem?
+    @State private var showingCamera = false
+    @State private var showingFiles = false
+    @StateObject private var recorder = MessageAudioRecorder()
     @FocusState private var composerFocused: Bool
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 10) { ForEach(activity) { item in ActivityRow(item: item).id(item.id).contextMenu { if item.kind == .message { Button("Delete message", systemImage: "trash", role: .destructive) { Task { await delete(item) } } } } } }.padding() }.onChange(of: activity) { _, value in if let last = value.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } } }
-            HStack(alignment: .bottom, spacing: 10) { TextField("Message \(conversation.peer.displayPhone)…", text: $draft, axis: .vertical).focused($composerFocused).lineLimit(1...5).textFieldStyle(.roundedBorder).submitLabel(.send).onSubmit { Task { await send() } }; Button { Task { await send() } } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending) }.padding().background(.bar)
-        }.navigationTitle(conversation.displayName == conversation.peer ? conversation.peer.displayPhone : conversation.displayName).navigationBarTitleDisplayMode(.inline).toolbar { Button { voice.start(number: conversation.peer) } label: { Image(systemName: "phone") }.disabled(!voice.canStartCall) }.task { await load(); if startComposing { composerFocused = true } }.onChange(of: session.activityRevision) { _, _ in Task { await load() } }
+            ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 10) { ForEach(activity) { item in ActivityRow(item: item).id(item.id).contextMenu { if item.kind == .message { if !item.body.isEmpty { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = item.body } }; Button("Delete message", systemImage: "trash", role: .destructive) { Task { await delete(item) } } } } } }.padding() }.onChange(of: activity) { _, value in if let last = value.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } } }
+            MessageComposer(draft: $draft, attachment: $attachment, photoItem: $photoItem, showingCamera: $showingCamera, showingFiles: $showingFiles, sending: sending, recording: recorder.isRecording, focused: $composerFocused, onRecord: recordAudio) { Task { await send() } }
+        }.navigationTitle(conversation.displayName == conversation.peer ? conversation.peer.displayPhone : conversation.displayName).navigationBarTitleDisplayMode(.inline).toolbar { Button { voice.start(number: conversation.peer) } label: { Image(systemName: "phone") }.disabled(!voice.canStartCall) }.task { await load(); if startComposing { composerFocused = true } }.onChange(of: session.activityRevision) { _, _ in Task { await load() } }.onChange(of: photoItem) { _, item in Task { await loadPhoto(item) } }.sheet(isPresented: $showingCamera) { CameraPicker { image in if let data = image.jpegData(compressionQuality: 0.82) { attachment = OutgoingAttachment(name: "photo.jpg", contentType: "image/jpeg", data: data) } } }.fileImporter(isPresented: $showingFiles, allowedContentTypes: [.image, .audio, .movie, .pdf]) { result in loadFile(result) }
     }
     private func load() async { do { activity = try await session.activity(peer: conversation.peer) } catch { session.error = error.localizedDescription } }
-    private func send() async { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); sending = true; do { try await session.send(to: conversation.peer, text: text); draft = ""; await load() } catch { session.error = error.localizedDescription }; sending = false }
+    private func send() async { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty || attachment != nil else { return }; sending = true; do { try await session.send(to: conversation.peer, text: text, attachment: attachment); draft = ""; attachment = nil; photoItem = nil; await load() } catch { session.error = error.localizedDescription }; sending = false }
     private func delete(_ item: ActivityItem) async { do { try await session.deleteMessage(id: item.id); activity.removeAll { $0.id == item.id }; await session.refresh() } catch { session.error = error.localizedDescription } }
+    private func loadPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; attachment = OutgoingAttachment(name: "photo.jpg", contentType: item.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg", data: data) }
+    private func loadFile(_ result: Result<URL, Error>) { do { let url = try result.get(); let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); attachment = OutgoingAttachment(name: url.lastPathComponent, contentType: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream", data: data) } catch { session.error = error.localizedDescription } }
+    private func recordAudio() { do { if let completed = try recorder.toggle() { attachment = completed } } catch { session.error = error.localizedDescription } }
+}
+
+private struct MessageComposer: View {
+    @Binding var draft: String
+    @Binding var attachment: OutgoingAttachment?
+    @Binding var photoItem: PhotosPickerItem?
+    @Binding var showingCamera: Bool
+    @Binding var showingFiles: Bool
+    let sending: Bool
+    let recording: Bool
+    let focused: FocusState<Bool>.Binding
+    let onRecord: () -> Void
+    let onSend: () -> Void
+    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
+    var body: some View {
+        VStack(spacing: 8) {
+            if let attachment {
+                HStack(spacing: 10) {
+                    Image(systemName: attachment.contentType.hasPrefix("image/") ? "photo.fill" : attachment.contentType.hasPrefix("audio/") ? "waveform" : "doc.fill").frame(width: 34, height: 34).background(relayGreen).foregroundStyle(relayInk).clipShape(RoundedRectangle(cornerRadius: 9))
+                    VStack(alignment: .leading, spacing: 2) { Text(attachment.name).font(.subheadline.weight(.semibold)).lineLimit(1); Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file)).font(.caption2).foregroundStyle(.secondary) }
+                    Spacer(); Button { self.attachment = nil; photoItem = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.title3) }.accessibilityLabel("Remove attachment")
+                }.padding(.horizontal, 12).padding(.top, 8)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Menu {
+                    PhotosPicker(selection: $photoItem, matching: .images) { Label("Photo Library", systemImage: "photo.on.rectangle") }
+                    Button { showingCamera = true } label: { Label("Take Photo", systemImage: "camera") }
+                    Button { showingFiles = true } label: { Label("Choose File", systemImage: "folder") }
+                } label: { Image(systemName: "plus").font(.headline).frame(width: 34, height: 34).background(Color(.tertiarySystemFill)).clipShape(Circle()) }.accessibilityLabel("Add attachment")
+                TextField("Message", text: $draft, axis: .vertical)
+                    .focused(focused).lineLimit(1...6).padding(.horizontal, 13).padding(.vertical, 9)
+                    .foregroundStyle(Color.primary).background(Color(.secondarySystemBackground)).clipShape(RoundedRectangle(cornerRadius: 19))
+                    .overlay(RoundedRectangle(cornerRadius: 19).stroke(Color(.separator).opacity(0.55), lineWidth: 0.5))
+                if draft.isEmpty && attachment == nil {
+                    Button(action: onRecord) { Image(systemName: recording ? "stop.fill" : "waveform").font(.headline).frame(width: 36, height: 36).background(recording ? Color.red : Color(.tertiarySystemFill)).foregroundStyle(recording ? .white : Color.primary).clipShape(Circle()) }.accessibilityLabel(recording ? "Stop voice message" : "Record voice message")
+                } else {
+                    Button(action: onSend) { Image(systemName: "arrow.up").font(.headline.bold()).frame(width: 36, height: 36).background(canSend ? relayGreen : Color(.tertiarySystemFill)).foregroundStyle(canSend ? relayInk : Color.secondary).clipShape(Circle()) }.disabled(!canSend || sending).accessibilityLabel("Send")
+                }
+            }.padding(.horizontal, 10).padding(.bottom, 8)
+        }.background(.bar)
+    }
+}
+
+@MainActor private final class MessageAudioRecorder: NSObject, ObservableObject {
+    @Published private(set) var isRecording = false
+    private var recorder: AVAudioRecorder?
+    private var outputURL: URL?
+    func toggle() throws -> OutgoingAttachment? {
+        if isRecording {
+            recorder?.stop(); isRecording = false
+            guard let outputURL else { return nil }
+            let data = try Data(contentsOf: outputURL)
+            return OutgoingAttachment(name: "voice-message.m4a", contentType: "audio/mp4", data: data)
+        }
+        let granted = AVAudioApplication.shared.recordPermission == .granted
+        guard granted else { AVAudioApplication.requestRecordPermission { _ in }; throw RelayAPIError.server("Allow microphone access, then tap the voice-message button again.") }
+        let session = AVAudioSession.sharedInstance(); try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetoothHFP]); try session.setActive(true)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("relay-\(UUID().uuidString).m4a")
+        recorder = try AVAudioRecorder(url: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 32_000, AVNumberOfChannelsKey: 1, AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue]); recorder?.record(); outputURL = url; isRecording = true
+        return nil
+    }
+}
+
+private struct CameraPicker: UIViewControllerRepresentable {
+    let onImage: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+    func makeUIViewController(context: Context) -> UIImagePickerController { let picker = UIImagePickerController(); picker.sourceType = .camera; picker.delegate = context.coordinator; return picker }
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPicker; init(parent: CameraPicker) { self.parent = parent }
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) { if let image = info[.originalImage] as? UIImage { parent.onImage(image) }; parent.dismiss() }
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
+    }
 }
 
 private struct ActivityRow: View {

@@ -204,11 +204,11 @@ export async function provisionExistingTelnyxNumber(apiKey: string, input: { e16
 
 export type SentMessage = { id: string; from: string; to: string; text: string; status: string; occurredAt: string };
 
-export async function sendTelnyxMessage(apiKey: string, input: { from: string; to: string; text: string; webhookUrl: string }): Promise<SentMessage> {
+export async function sendTelnyxMessage(apiKey: string, input: { from: string; to: string; text: string; webhookUrl: string; mediaUrls?: string[] }): Promise<SentMessage> {
   const response = await fetch("https://api.telnyx.com/v2/messages", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ from: input.from, to: input.to, text: input.text, webhook_url: input.webhookUrl }),
+    body: JSON.stringify({ from: input.from, to: input.to, ...(input.text ? { text: input.text } : {}), ...(input.mediaUrls?.length ? { media_urls: input.mediaUrls } : {}), webhook_url: input.webhookUrl }),
   });
   const result: unknown = await response.json();
   if (!response.ok) throw new Error(`Telnyx message request failed (${response.status})`);

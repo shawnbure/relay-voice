@@ -22,6 +22,7 @@ final class RelaySession: ObservableObject {
             state = .disconnected
         } else {
             await refresh()
+            if state == .connected { startEvents() }
         }
     }
     func refresh() async {
@@ -32,12 +33,15 @@ final class RelaySession: ObservableObject {
             let values = try await (me, list, preferences)
             identity = values.0; conversations = values.1.data; settings = values.2.data; state = .connected; error = nil
             await voice.connect(api: .shared, ownNumber: values.0.phone?.e164 ?? "")
-            startEvents()
-        } catch { self.error = error.localizedDescription; state = identity == nil ? .disconnected : .connected }
+        } catch {
+            if identity == nil { self.error = error.localizedDescription; state = .disconnected }
+            else { state = .connected; if !isTransientNetworkError(error) { self.error = error.localizedDescription } }
+        }
     }
     func resume() async {
         guard RelayAPI.shared.token != nil else { state = .disconnected; return }
         if identity == nil { await refresh() } else { await voice.ensureConnected() }
+        if state == .connected { startEvents() }
     }
     func activity(peer: String) async throws -> [ActivityItem] {
         guard let normalized = peer.e164 else { throw RelayAPIError.server("This conversation does not contain a valid phone number.") }
@@ -45,7 +49,10 @@ final class RelaySession: ObservableObject {
         let result: DataEnvelope<[ActivityItem]> = try await RelayAPI.shared.request("/v1/activity?peer=\(encoded)")
         return result.data
     }
-    func send(to: String, text: String) async throws { let _: EmptyResponse = try await RelayAPI.shared.request("/v1/messages", method: "POST", body: MessageRequest(to: to, text: text)); await refresh() }
+    func send(to: String, text: String, attachment: OutgoingAttachment? = nil) async throws {
+        let encoded = attachment.map { MessageAttachmentRequest(name: $0.name, contentType: $0.contentType, base64: $0.data.base64EncodedString()) }
+        let _: EmptyResponse = try await RelayAPI.shared.request("/v1/messages", method: "POST", body: MessageRequest(to: to, text: text, attachment: encoded)); await refresh()
+    }
     func deleteMessage(id: String) async throws { let _: EmptyResponse = try await RelayAPI.shared.request("/v1/messages/\(id)", method: "DELETE") }
     func deleteConversation(peer: String) async throws {
         guard let normalized = peer.e164 else { throw RelayAPIError.server("This conversation does not contain a valid phone number.") }
@@ -55,15 +62,20 @@ final class RelaySession: ObservableObject {
     }
     func saveSettings(_ value: RelaySettings) async throws { let _: EmptyResponse = try await RelayAPI.shared.request("/v1/settings", method: "PUT", body: value); settings = value }
     private func startEvents() {
-        events?.cancel()
+        guard events == nil else { return }
         var components = URLComponents(url: RelayAPI.shared.baseURL, resolvingAgainstBaseURL: false)!
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.path = "/v1/events"; components.query = nil
         var request = URLRequest(url: components.url!); if let token = RelayAPI.shared.token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         events = URLSession.shared.webSocketTask(with: request); events?.resume(); receiveEvent()
     }
-    private func receiveEvent() { events?.receive { [weak self] result in Task { @MainActor in guard let self else { return }; if case .success = result { self.activityRevision += 1; await self.refresh(); self.receiveEvent() } else { try? await Task.sleep(for: .seconds(2)); self.startEvents() } } } }
+    private func receiveEvent() { events?.receive { [weak self] result in Task { @MainActor in guard let self else { return }; if case .success = result { self.activityRevision += 1; await self.refresh(); self.receiveEvent() } else { self.events = nil; try? await Task.sleep(for: .seconds(2)); self.startEvents() } } } }
+    private func isTransientNetworkError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        return [.networkConnectionLost, .notConnectedToInternet, .timedOut, .cannotConnectToHost, .cannotFindHost].contains(urlError.code)
+    }
 }
 
-private struct MessageRequest: Encodable { let to: String; let text: String }
+private struct MessageAttachmentRequest: Encodable { let name: String; let contentType: String; let base64: String }
+private struct MessageRequest: Encodable { let to: String; let text: String; let attachment: MessageAttachmentRequest? }
 private struct EmptyResponse: Decodable {}

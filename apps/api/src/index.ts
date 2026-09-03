@@ -14,6 +14,12 @@ app.use("/v1/*", cors({ origin: (origin, c) => origin === c.env.WEB_ORIGIN ? ori
 app.use("/v1/*", requireSameOrigin);
 app.get("/health", (c) => c.json({ ok: true }));
 
+app.get("/v1/outbound-media/:token", async (c) => {
+  const token = c.req.param("token");
+  if (!/^[0-9a-f-]{36}$/.test(token)) return c.notFound();
+  return mediaResponse(c.env.MEDIA, `outbound-public/${token}`);
+});
+
 app.get("/v1/auth/status", async (c) => {
   const row = await c.env.DB.prepare("SELECT COUNT(*) count FROM passkeys").first<{ count: number }>();
   return c.json({ needsSetup: Number(row?.count ?? 0) === 0 });
@@ -242,13 +248,27 @@ app.get("/v1/voicemails/:id/audio", async (c) => {
 
 app.post("/v1/messages", async (c) => {
   const p = c.get("principal");
-  const body = await c.req.json<{ to?: string; text?: string }>();
-  const to = body.to?.trim(); const text = body.text?.trim();
-  if (!to || !E164.test(to) || !text || text.length > 1600) return c.json({ error: "valid E.164 destination and 1-1600 character text are required" }, 400);
+  const body = await c.req.json<{ to?: string; text?: string; attachment?: { name?: string; contentType?: string; base64?: string } }>();
+  const to = body.to?.trim(); const text = body.text?.trim() ?? "";
+  if (!to || !E164.test(to) || (!text && !body.attachment) || text.length > 1600) return c.json({ error: "valid E.164 destination and message content are required" }, 400);
   const phone = await c.env.DB.prepare("SELECT e164 FROM phone_numbers WHERE tenant_id=? ORDER BY created_at LIMIT 1").bind(p.tenantId).first<{ e164: string }>();
   if (!phone) return c.json({ error: "workspace has no provisioned phone number" }, 409);
-  const sent = await sendTelnyxMessage(c.env.TELNYX_API_KEY, { from: phone.e164, to, text, webhookUrl: `${c.env.WEB_ORIGIN}/v1/webhooks/telnyx` });
-  await c.env.DB.prepare("INSERT OR IGNORE INTO messages (id, tenant_id, telnyx_message_id, direction, from_number, to_number, body, status, occurred_at) VALUES (?, ?, ?, 'outbound', ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), p.tenantId, sent.id, sent.from, sent.to, sent.text, sent.status, sent.occurredAt).run();
+  const media: StoredMedia[] = [];
+  const mediaUrls: string[] = [];
+  if (body.attachment) {
+    const contentType = body.attachment.contentType?.toLowerCase() ?? "";
+    if (!/^(image|audio|video)\/[a-z0-9.+-]+$/.test(contentType) && contentType !== "application/pdf") return c.json({ error: "unsupported attachment type" }, 415);
+    let bytes: Uint8Array;
+    try { bytes = Uint8Array.from(atob(body.attachment.base64 ?? ""), (value) => value.charCodeAt(0)); } catch { return c.json({ error: "invalid attachment" }, 400); }
+    if (!bytes.byteLength || bytes.byteLength > 5_000_000) return c.json({ error: "attachment must be between 1 byte and 5 MB" }, 413);
+    const token = crypto.randomUUID(); const key = `outbound-public/${token}`;
+    await c.env.MEDIA.put(key, bytes, { httpMetadata: { contentType, cacheControl: "private, max-age=86400" }, customMetadata: { tenantId: p.tenantId, name: (body.attachment.name ?? "attachment").slice(0, 120) } });
+    media.push({ key, contentType, size: bytes.byteLength }); mediaUrls.push(`${c.env.WEB_ORIGIN}/v1/outbound-media/${token}`);
+  }
+  let sent: Awaited<ReturnType<typeof sendTelnyxMessage>>;
+  try { sent = await sendTelnyxMessage(c.env.TELNYX_API_KEY, { from: phone.e164, to, text, mediaUrls, webhookUrl: `${c.env.WEB_ORIGIN}/v1/webhooks/telnyx` }); }
+  catch (error) { if (media.length) await c.env.MEDIA.delete(media.map((item) => item.key)); throw error; }
+  await c.env.DB.prepare("INSERT OR IGNORE INTO messages (id, tenant_id, telnyx_message_id, direction, from_number, to_number, body, status, occurred_at, media_json) VALUES (?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), p.tenantId, sent.id, sent.from, sent.to, sent.text, sent.status, sent.occurredAt, JSON.stringify(media)).run();
   c.env.EVENTS.getByName(p.tenantId).broadcast(JSON.stringify({ type: "message.created", at: sent.occurredAt }));
   return c.json({ data: sent }, 201);
 });
