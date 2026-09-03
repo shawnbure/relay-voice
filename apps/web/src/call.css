@@ -1,0 +1,90 @@
+.call-progress {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid #d8ded7;
+  border-radius: 12px;
+  background: white;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.call-progress > div { display: grid; gap: 2px; }
+.call-progress strong { font-size: 13px; }
+.call-progress small { color: #788279; font: 600 12px monospace; }
+.call-live-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #6da832;
+  box-shadow: 0 0 0 4px #6da83220;
+  animation: call-pulse 1.5s infinite;
+}
+.dial-actions { padding-top: 18px; }
+@keyframes call-pulse { 50% { opacity: .45; } }
+
+.message-meta { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.bubble.incoming .message-meta { justify-content: flex-start; }
+.delete-message { width: 25px; height: 25px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: currentColor; opacity: .42; display: grid; place-items: center; }
+.delete-message:hover, .delete-message:focus-visible { opacity: 1; background: #00000010; }
+@media (hover: hover) { .bubble .delete-message { visibility: hidden; }.bubble:hover .delete-message, .bubble:focus-within .delete-message { visibility: visible; } }
+.message-media { display: grid; gap: 7px; max-width: 320px; }
+.message-media img { display: block; max-width: 100%; max-height: 320px; border-radius: 11px; object-fit: cover; }
+.message-media audio { width: min(280px, 100%); }
+.message-media a { color: inherit; font-weight: 600; }
+.history-event { align-self: center; width: min(440px, 92%); padding: 11px 14px; border: 1px solid #e0e5df; border-radius: 13px; background: #f7f9f6; display: flex; align-items: flex-start; gap: 11px; }
+.history-icon { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 10px; background: #e3efcf; color: #557225; display: grid; place-items: center; }
+.history-event > div { min-width: 0; display: grid; gap: 3px; }
+.history-event strong { font-size: 13px; }
+.history-event small, .history-event .processing { color: #7d877f; font-size: 11px; }
+.history-event audio { width: min(330px, 100%); margin-top: 7px; height: 36px; }
+.voicemail-event { background: #f2f6ec; border-color: #d9e5ca; }
+.mobile-nav, .mobile-dialer-close { display: none; }
+.active-call-controller { position: fixed; z-index: 40; left: 50%; bottom: 18px; transform: translateX(-50%); width: min(460px, calc(100% - 28px)); min-height: 72px; padding: 11px 12px 11px 15px; border-radius: 18px; background: #172019; color: white; box-shadow: 0 14px 42px #10171055; display: flex; align-items: center; gap: 12px; }
+.active-call-controller > div { min-width: 0; flex: 1; display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; }
+.active-call-controller small { grid-column: 1; color: #aab4ac; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.active-call-controller strong { grid-column: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.active-call-controller time { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: #dce5dd; font: 700 14px monospace; }
+.active-call-controller > button { min-height: 46px; padding: 0 13px; border: 0; border-radius: 13px; color: white; display: flex; align-items: center; gap: 7px; font-weight: 700; }
+.active-call-controller > button svg { width: 19px; }
+.active-call-controller .keypad-toggle { background: #344037; }
+.active-call-controller .hangup-control { background: #d95849; }
+.active-call-controller .hangup-control svg { transform: rotate(135deg); }
+
+@media (max-width: 640px) {
+  .app-header { min-height: 72px; padding: 12px; grid-template-rows: none; }
+  .activity-pane, .communication-pane, .settings-pane { padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
+  .dialer-panel {
+    display: none;
+    inset: env(safe-area-inset-top) 0 calc(66px + env(safe-area-inset-bottom));
+    width: 100%;
+    padding: 18px 22px 14px;
+    box-shadow: none;
+  }
+  .mobile-dialer-open .dialer-panel { display: flex; }
+  .mobile-dialer-close { width: 38px; height: 38px; border: 1px solid #d8ded7; border-radius: 11px; background: white; color: #59645b; place-items: center; }
+  .mobile-dialer-open .mobile-dialer-close { display: grid; }
+  .dialer-panel > header { margin-bottom: 12px; }
+  .dial-from { padding: 10px 12px; }
+  .dial-input { margin: 12px 0 14px; }
+  .keypad { width: 270px; margin: 0 auto; gap: 12px 24px; }
+  .keypad button { width: 64px; height: 64px; font-size: 26px; border-width: 1.5px; }
+  .dial-actions { margin-top: 16px; padding-top: 0; }
+  .dial-actions button { min-height: 50px; }
+  .mobile-nav {
+    position: fixed;
+    z-index: 30;
+    inset: auto 0 0;
+    height: calc(66px + env(safe-area-inset-bottom));
+    padding: 7px 18px env(safe-area-inset-bottom);
+    border-top: 1px solid #d9dfd8;
+    background: #fbfcfaf2;
+    backdrop-filter: blur(18px);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .mobile-nav button { border: 0; background: transparent; color: #7b857d; display: grid; place-items: center; align-content: center; gap: 2px; font-size: 10px; font-weight: 600; }
+  .mobile-nav button svg { width: 22px; height: 22px; }
+  .mobile-nav button.active { color: #29391c; }
+  .composer { margin-bottom: 8px; }
+  .active-call-controller { left: 10px; right: 10px; bottom: calc(74px + env(safe-area-inset-bottom)); transform: none; width: auto; }
+}

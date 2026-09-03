@@ -1,0 +1,3 @@
+[submodule "apps/ios/Vendor/telnyx-webrtc-ios"]
+	path = apps/ios/Vendor/telnyx-webrtc-ios
+	url = https://github.com/team-telnyx/telnyx-webrtc-ios.git

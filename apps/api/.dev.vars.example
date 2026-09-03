@@ -1,0 +1,6 @@
+TELNYX_API_KEY=KEY...
+TELNYX_PUBLIC_KEY=base64-encoded-ed25519-public-key
+AUTH_SECRET=replace-with-a-long-random-value
+DEV_BEARER_TOKEN=local-relay-token
+ENVIRONMENT=development
+WEB_ORIGIN=http://localhost:5173

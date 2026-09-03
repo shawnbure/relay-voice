@@ -1,0 +1,379 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		143D298B8A2756210EB8981D /* PhoneViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED85E9A4219730E3ADD5B415 /* PhoneViews.swift */; };
+		206EDD10F5FF449A7B5607E4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E212F7E468560D5F17EB0BA1 /* RootView.swift */; };
+		4900F6EF78F8F5B2F3228ECA /* telnyx-webrtc-ios in Frameworks */ = {isa = PBXBuildFile; productRef = C59CF750EACF4E1CEB8C0C88 /* telnyx-webrtc-ios */; };
+		5537BF2868592255AAF0F670 /* RelayApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 948EF6B3DA85FF1BA8CFC6EE /* RelayApp.swift */; };
+		69DC4BF7071D612030D70D4A /* RelaySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6F8D0187C9233E0C9D9A53E /* RelaySession.swift */; };
+		7E6AB347688C6AFC361EC8B5 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7CD7CDACF38A49E9FFF466 /* Models.swift */; };
+		83A8BA29AC759A450A261572 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 359767A5465051721E7F2076 /* Assets.xcassets */; };
+		8C972E1D9F33398EAE9E84C0 /* RelayAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ECD94C0F0A719EE2FF7960C /* RelayAPI.swift */; };
+		B0D92E6994C577E47D478DEC /* VoiceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A203471CB5071FE40FD885 /* VoiceManager.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		359767A5465051721E7F2076 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		3ECD94C0F0A719EE2FF7960C /* RelayAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayAPI.swift; sourceTree = "<group>"; };
+		4B5FF3D9A36195329B8AAA1D /* Relay.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Relay.entitlements; sourceTree = "<group>"; };
+		5F54AB8D1B43CEB25B21FA77 /* telnyx-webrtc-ios */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "telnyx-webrtc-ios"; path = "Vendor/telnyx-webrtc-ios"; sourceTree = SOURCE_ROOT; };
+		948EF6B3DA85FF1BA8CFC6EE /* RelayApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayApp.swift; sourceTree = "<group>"; };
+		A9A203471CB5071FE40FD885 /* VoiceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceManager.swift; sourceTree = "<group>"; };
+		B2640FB004F58617990C7498 /* Relay.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Relay.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B6F8D0187C9233E0C9D9A53E /* RelaySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySession.swift; sourceTree = "<group>"; };
+		CA7CD7CDACF38A49E9FFF466 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		DD6546E114339B049F0E091E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		E212F7E468560D5F17EB0BA1 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		ED85E9A4219730E3ADD5B415 /* PhoneViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneViews.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		EF50208E6B06E9FF6A31ED33 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4900F6EF78F8F5B2F3228ECA /* telnyx-webrtc-ios in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		8108792C7BDAA099F962E116 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B2640FB004F58617990C7498 /* Relay.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		96D02309876A3C029DF41C69 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				5F54AB8D1B43CEB25B21FA77 /* telnyx-webrtc-ios */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		DC658091D1A7F7FB428FB8C2 = {
+			isa = PBXGroup;
+			children = (
+				96D02309876A3C029DF41C69 /* Packages */,
+				E543C263B165077F89769C48 /* Relay */,
+				8108792C7BDAA099F962E116 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E543C263B165077F89769C48 /* Relay */ = {
+			isa = PBXGroup;
+			children = (
+				359767A5465051721E7F2076 /* Assets.xcassets */,
+				DD6546E114339B049F0E091E /* Info.plist */,
+				CA7CD7CDACF38A49E9FFF466 /* Models.swift */,
+				ED85E9A4219730E3ADD5B415 /* PhoneViews.swift */,
+				4B5FF3D9A36195329B8AAA1D /* Relay.entitlements */,
+				3ECD94C0F0A719EE2FF7960C /* RelayAPI.swift */,
+				948EF6B3DA85FF1BA8CFC6EE /* RelayApp.swift */,
+				B6F8D0187C9233E0C9D9A53E /* RelaySession.swift */,
+				E212F7E468560D5F17EB0BA1 /* RootView.swift */,
+				A9A203471CB5071FE40FD885 /* VoiceManager.swift */,
+			);
+			path = Relay;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		00CC2921912F47FC3C6615F8 /* Relay */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 123F6CBD015F52CA68038BCE /* Build configuration list for PBXNativeTarget "Relay" */;
+			buildPhases = (
+				EC79C452CC5E84280E112945 /* Sources */,
+				B2BD664DAF308B86A7FDF1AC /* Resources */,
+				EF50208E6B06E9FF6A31ED33 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Relay;
+			packageProductDependencies = (
+				C59CF750EACF4E1CEB8C0C88 /* telnyx-webrtc-ios */,
+			);
+			productName = Relay;
+			productReference = B2640FB004F58617990C7498 /* Relay.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		00400E7BA46B4893DB3DAE46 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					00CC2921912F47FC3C6615F8 = {
+						DevelopmentTeam = "";
+					};
+				};
+			};
+			buildConfigurationList = CAE7F6E0ECA548A1858A3109 /* Build configuration list for PBXProject "Relay" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = DC658091D1A7F7FB428FB8C2;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B24E2E1458B2890EFB7E6301 /* XCLocalSwiftPackageReference "Vendor/telnyx-webrtc-ios" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 8108792C7BDAA099F962E116 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				00CC2921912F47FC3C6615F8 /* Relay */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B2BD664DAF308B86A7FDF1AC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				83A8BA29AC759A450A261572 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		EC79C452CC5E84280E112945 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7E6AB347688C6AFC361EC8B5 /* Models.swift in Sources */,
+				143D298B8A2756210EB8981D /* PhoneViews.swift in Sources */,
+				8C972E1D9F33398EAE9E84C0 /* RelayAPI.swift in Sources */,
+				5537BF2868592255AAF0F670 /* RelayApp.swift in Sources */,
+				69DC4BF7071D612030D70D4A /* RelaySession.swift in Sources */,
+				206EDD10F5FF449A7B5607E4 /* RootView.swift in Sources */,
+				B0D92E6994C577E47D478DEC /* VoiceManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		2081E5984332363D157E9BAF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		71F4EFF4B9550541A79E6FCC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		7CB4F2CB7DAEE9752ED1E360 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Relay/Relay.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Relay/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.relay;
+				RELAY_API_BASE_URL = "https://relay.example.com";
+				PRODUCT_NAME = Relay;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		F3D9B9C587F1507CA874D0DE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Relay/Relay.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Relay/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.relay;
+				RELAY_API_BASE_URL = "https://relay.example.com";
+				PRODUCT_NAME = Relay;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		123F6CBD015F52CA68038BCE /* Build configuration list for PBXNativeTarget "Relay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7CB4F2CB7DAEE9752ED1E360 /* Debug */,
+				F3D9B9C587F1507CA874D0DE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CAE7F6E0ECA548A1858A3109 /* Build configuration list for PBXProject "Relay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2081E5984332363D157E9BAF /* Debug */,
+				71F4EFF4B9550541A79E6FCC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B24E2E1458B2890EFB7E6301 /* XCLocalSwiftPackageReference "Vendor/telnyx-webrtc-ios" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Vendor/telnyx-webrtc-ios";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C59CF750EACF4E1CEB8C0C88 /* telnyx-webrtc-ios */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = "telnyx-webrtc-ios";
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 00400E7BA46B4893DB3DAE46 /* Project object */;
+}
