@@ -234,11 +234,6 @@ private struct NewConversationView: View {
                     if !number.isEmpty { Button { number = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear number") }
                 }
                 Button { showingContacts = true } label: { Label("Choose from Contacts", systemImage: "person.crop.circle") }
-                HStack {
-                    Button { if let value = destination { UIPasteboard.general.string = value } } label: { Label("Copy", systemImage: "doc.on.doc") }.disabled(destination == nil)
-                    Spacer()
-                    Button { if let value = UIPasteboard.general.string?.e164 { number = value } } label: { Label("Paste", systemImage: "doc.on.clipboard") }
-                }
             }
             if destination == nil && !number.isEmpty { Text("Enter a complete 10-digit US phone number.").font(.footnote).foregroundStyle(.secondary) }
         }

@@ -18,18 +18,21 @@ struct DialerView: View {
                 Spacer(minLength: 12)
                 ZStack(alignment: .trailing) {
                     VStack(spacing: 5) {
-                        Text(voice.isInCall ? voice.remoteNumber.displayPhone : (number.isEmpty ? "Enter a number" : number.displayPhone))
-                            .font(.system(size: number.isEmpty ? 26 : 30, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.65)
+                        if voice.isInCall {
+                            Text(voice.remoteNumber.displayPhone).font(.system(size: 30, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.65)
+                        } else {
+                            TextField("Enter a number", text: $number)
+                                .keyboardType(.phonePad).textContentType(.telephoneNumber)
+                                .multilineTextAlignment(.center)
+                                .font(.system(size: number.isEmpty ? 26 : 30, weight: .medium, design: .rounded))
+                                .lineLimit(1).minimumScaleFactor(0.65)
+                                .accessibilityLabel("Phone number")
+                        }
                         Text(voice.status.label).font(.callout).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity)
                     if !voice.isInCall {
                         HStack(spacing: 2) {
-                            Menu {
-                                Button("Choose contact", systemImage: "person.crop.circle") { showingContacts = true }
-                                if !number.isEmpty { Button("Copy number", systemImage: "doc.on.doc") { UIPasteboard.general.string = number.e164 ?? number } }
-                                Button("Paste number", systemImage: "doc.on.clipboard") { pasteNumber() }
-                                if !number.isEmpty { Button("Clear", systemImage: "xmark.circle", role: .destructive) { number = "" } }
-                            } label: { Image(systemName: "ellipsis.circle").font(.title2).frame(width: 44, height: 48) }
+                            Button { showingContacts = true } label: { Image(systemName: "person.crop.circle").font(.title2).frame(width: 44, height: 48) }.accessibilityLabel("Choose contact")
                             if !number.isEmpty { Button { number = String(number.dropLast()) } label: { Image(systemName: "delete.left").font(.title2).frame(width: 44, height: 48) }.accessibilityLabel("Delete digit") }
                         }
                     }
@@ -63,7 +66,6 @@ struct DialerView: View {
         }.navigationTitle("Keypad").navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingContacts) { ContactPhonePicker { number = $0 } }
     }
-    private func pasteNumber() { if let pasted = UIPasteboard.general.string, let normalized = pasted.e164 { number = normalized } }
 }
 
 struct ContactPhonePicker: UIViewControllerRepresentable {
