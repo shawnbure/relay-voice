@@ -221,9 +221,40 @@ private struct MessageAttachment: View {
 
 private struct NewConversationView: View {
     @State private var number = ""
+    @State private var showingContacts = false
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
-    var body: some View { Form { Section("Phone number") { TextField("10-digit phone number", text: $number).keyboardType(.phonePad).font(.title3) }; if let e164 = number.e164 { Section { NavigationLink(value: ConversationRoute.message(Conversation(peer: e164, displayName: e164, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message))) { Label("Message \(e164.displayPhone)", systemImage: "message.fill") }; Button { voice.start(number: e164) } label: { Label("Call \(e164.displayPhone)", systemImage: "phone.fill") }.disabled(!voice.canStartCall || e164 == session.identity?.phone?.e164) } } }.navigationTitle("New communication") }
+    private var destination: String? { number.e164 }
+    private var conversation: Conversation? { destination.map { Conversation(peer: $0, displayName: $0, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message) } }
+    var body: some View {
+        Form {
+            Section("Phone number") {
+                HStack {
+                    TextField("10-digit phone number", text: $number).keyboardType(.phonePad).textContentType(.telephoneNumber).font(.title3)
+                    if !number.isEmpty { Button { number = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear number") }
+                }
+                Button { showingContacts = true } label: { Label("Choose from Contacts", systemImage: "person.crop.circle") }
+                HStack {
+                    Button { if let value = destination { UIPasteboard.general.string = value } } label: { Label("Copy", systemImage: "doc.on.doc") }.disabled(destination == nil)
+                    Spacer()
+                    Button { if let value = UIPasteboard.general.string?.e164 { number = value } } label: { Label("Paste", systemImage: "doc.on.clipboard") }
+                }
+            }
+            if destination == nil && !number.isEmpty { Text("Enter a complete 10-digit US phone number.").font(.footnote).foregroundStyle(.secondary) }
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack(spacing: 12) {
+                if let conversation {
+                    NavigationLink { ThreadView(conversation: conversation, startComposing: true) } label: { Label("Message", systemImage: "message.fill").frame(maxWidth: .infinity).frame(height: 50) }.buttonStyle(.borderedProminent).tint(relayInk)
+                } else {
+                    Label("Message", systemImage: "message.fill").frame(maxWidth: .infinity).frame(height: 50).foregroundStyle(.secondary).background(Color(.tertiarySystemFill)).clipShape(RoundedRectangle(cornerRadius: 13))
+                }
+                Button { if let destination { voice.start(number: destination) } } label: { Label("Call", systemImage: "phone.fill").frame(maxWidth: .infinity).frame(height: 50) }.buttonStyle(.borderedProminent).tint(relayGreen).foregroundStyle(relayInk).disabled(destination == nil || !voice.canStartCall)
+            }.padding(.horizontal).padding(.vertical, 10).background(.bar)
+        }
+        .navigationTitle("New communication")
+        .sheet(isPresented: $showingContacts) { ContactPhonePicker { number = $0 } }
+    }
 }
 
 private extension ActivityKind { var icon: String { switch self { case .message: "message"; case .call: "phone"; case .voicemail: "waveform" } } }

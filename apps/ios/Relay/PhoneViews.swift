@@ -1,3 +1,4 @@
+import ContactsUI
 import SwiftUI
 
 private let relayGreen = Color(red: 0.74, green: 0.96, blue: 0.29)
@@ -8,6 +9,7 @@ struct DialerView: View {
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
     @State private var number = ""
+    @State private var showingContacts = false
     private let keys = [DialKey("1", ""), DialKey("2", "ABC"), DialKey("3", "DEF"), DialKey("4", "GHI"), DialKey("5", "JKL"), DialKey("6", "MNO"), DialKey("7", "PQRS"), DialKey("8", "TUV"), DialKey("9", "WXYZ"), DialKey("*", ""), DialKey("0", "+"), DialKey("#", "")]
     var body: some View {
         GeometryReader { geometry in
@@ -20,7 +22,17 @@ struct DialerView: View {
                             .font(.system(size: number.isEmpty ? 26 : 30, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.65)
                         Text(voice.status.label).font(.callout).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity)
-                    if !number.isEmpty && !voice.isInCall { Button { number = String(number.dropLast()) } label: { Image(systemName: "delete.left").font(.title2).frame(width: 48, height: 48) }.accessibilityLabel("Delete digit") }
+                    if !voice.isInCall {
+                        HStack(spacing: 2) {
+                            Menu {
+                                Button("Choose contact", systemImage: "person.crop.circle") { showingContacts = true }
+                                if !number.isEmpty { Button("Copy number", systemImage: "doc.on.doc") { UIPasteboard.general.string = number.e164 ?? number } }
+                                Button("Paste number", systemImage: "doc.on.clipboard") { pasteNumber() }
+                                if !number.isEmpty { Button("Clear", systemImage: "xmark.circle", role: .destructive) { number = "" } }
+                            } label: { Image(systemName: "ellipsis.circle").font(.title2).frame(width: 44, height: 48) }
+                            if !number.isEmpty { Button { number = String(number.dropLast()) } label: { Image(systemName: "delete.left").font(.title2).frame(width: 44, height: 48) }.accessibilityLabel("Delete digit") }
+                        }
+                    }
                 }.frame(height: 78).padding(.horizontal, 20)
                 Spacer(minLength: 12)
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(keySize), spacing: 24), count: 3), spacing: 14) {
@@ -49,6 +61,29 @@ struct DialerView: View {
                 Spacer(minLength: 18)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.navigationTitle("Keypad").navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingContacts) { ContactPhonePicker { number = $0 } }
+    }
+    private func pasteNumber() { if let pasted = UIPasteboard.general.string, let normalized = pasted.e164 { number = normalized } }
+}
+
+struct ContactPhonePicker: UIViewControllerRepresentable {
+    let onSelect: (String) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+    func makeUIViewController(context: Context) -> CNContactPickerViewController {
+        let picker = CNContactPickerViewController()
+        picker.delegate = context.coordinator
+        picker.displayedPropertyKeys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactPhoneNumbersKey]
+        picker.predicateForEnablingContact = NSPredicate(format: "phoneNumbers.@count > 0")
+        return picker
+    }
+    func updateUIViewController(_ uiViewController: CNContactPickerViewController, context: Context) {}
+    final class Coordinator: NSObject, CNContactPickerDelegate {
+        let parent: ContactPhonePicker
+        init(parent: ContactPhonePicker) { self.parent = parent }
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contactProperty: CNContactProperty) {
+            guard let phone = contactProperty.value as? CNPhoneNumber, let normalized = phone.stringValue.e164 else { return }
+            parent.onSelect(normalized)
+        }
     }
 }
 
