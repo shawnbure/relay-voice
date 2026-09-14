@@ -1,3 +1,4 @@
+import AVFoundation
 import ContactsUI
 import SwiftUI
 
@@ -21,11 +22,8 @@ struct DialerView: View {
                         if voice.isInCall {
                             Text(voice.remoteNumber.displayPhone).font(.system(size: 30, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.65)
                         } else {
-                            TextField("Enter a number", text: $number)
-                                .keyboardType(.phonePad).textContentType(.telephoneNumber)
-                                .multilineTextAlignment(.center)
-                                .font(.system(size: number.isEmpty ? 26 : 30, weight: .medium, design: .rounded))
-                                .lineLimit(1).minimumScaleFactor(0.65)
+                            PhoneNumberField(number: $number)
+                                .frame(height: 48)
                                 .accessibilityLabel("Phone number")
                         }
                         Text(voice.status.label).font(.callout).foregroundStyle(.secondary)
@@ -76,6 +74,7 @@ struct ContactPhonePicker: UIViewControllerRepresentable {
         picker.delegate = context.coordinator
         picker.displayedPropertyKeys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactPhoneNumbersKey]
         picker.predicateForEnablingContact = NSPredicate(format: "phoneNumbers.@count > 0")
+        picker.predicateForSelectionOfContact = NSPredicate(value: false)
         return picker
     }
     func updateUIViewController(_ uiViewController: CNContactPickerViewController, context: Context) {}
@@ -85,6 +84,37 @@ struct ContactPhonePicker: UIViewControllerRepresentable {
         func contactPicker(_ picker: CNContactPickerViewController, didSelect contactProperty: CNContactProperty) {
             guard let phone = contactProperty.value as? CNPhoneNumber, let normalized = phone.stringValue.e164 else { return }
             parent.onSelect(normalized)
+        }
+    }
+}
+
+private struct PhoneNumberField: UIViewRepresentable {
+    @Binding var number: String
+    func makeCoordinator() -> Coordinator { Coordinator(number: $number) }
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.delegate = context.coordinator
+        field.textAlignment = .center
+        let baseFont = UIFont.systemFont(ofSize: 30, weight: .medium)
+        field.font = baseFont.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: 30) } ?? baseFont
+        field.placeholder = "Enter a number"
+        field.keyboardType = .phonePad
+        field.textContentType = .telephoneNumber
+        field.adjustsFontSizeToFitWidth = true
+        field.minimumFontSize = 20
+        field.inputView = UIView(frame: .zero)
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        return field
+    }
+    func updateUIView(_ field: UITextField, context: Context) { if field.text != number { field.text = number } }
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        @Binding var number: String
+        init(number: Binding<String>) { _number = number }
+        @objc func changed(_ field: UITextField) { number = field.text ?? "" }
+        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+            guard let current = textField.text, let swiftRange = Range(range, in: current) else { return false }
+            let candidate = current.replacingCharacters(in: swiftRange, with: string)
+            return candidate.phoneDigits.count <= 11
         }
     }
 }
@@ -197,15 +227,63 @@ private struct InCallKeypadView: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var session: RelaySession
+    @EnvironmentObject private var voice: VoiceManager
     @State private var saving = false
+    @StateObject private var greetingRecorder = GreetingRecorder()
     var body: some View {
         Form {
-            Section("Your Relay number") { Text(session.identity?.phone?.e164.displayPhone ?? "Not provisioned").font(.title3.bold()) }
-            Section("Receive calls on") { Toggle("Web browsers", isOn: binding(\.receiveWeb)); Toggle("This iPhone", isOn: binding(\.receiveMobile)) }
-            Section("Voicemail") { Toggle("Voicemail answering", isOn: binding(\.voicemailEnabled)); LabeledContent("Greeting", value: session.settings.hasVoicemailGreeting ? "Personal" : "Default") }
-        }.navigationTitle("Settings").overlay { if saving { ProgressView().padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 12)) } }
+            Section("Relay line") {
+                LabeledContent { Text(session.identity?.phone?.e164.displayPhone ?? "Not provisioned").fontWeight(.semibold) } label: { Label("Your number", systemImage: "phone.fill") }
+                LabeledContent { Text(voice.status.label).foregroundStyle(voice.status == .ready ? .green : .secondary) } label: { Label("Calling", systemImage: "antenna.radiowaves.left.and.right") }
+            }
+            Section {
+                Toggle(isOn: binding(\.receiveMobile)) { Label("This iPhone", systemImage: "iphone") }
+                Toggle(isOn: binding(\.receiveWeb)) { Label("Web browsers", systemImage: "desktopcomputer") }
+            } header: { Text("Ring on") } footer: { Text("Push notifications wake Relay for incoming calls even when the app is not open.") }
+            Section {
+                Toggle(isOn: binding(\.voicemailEnabled)) { Label("Answer missed calls", systemImage: "recordingtape") }
+                HStack {
+                    Label(session.settings.hasVoicemailGreeting ? "Personal greeting" : "Default greeting", systemImage: "waveform")
+                    Spacer()
+                    if session.settings.hasVoicemailGreeting { Button { Task { _ = await AudioPlayback.shared.toggle(path: "/v1/settings/voicemail-greeting") } } label: { Image(systemName: "play.circle.fill").font(.title2) }.accessibilityLabel("Play greeting") }
+                }
+                Button { Task { await recordGreeting() } } label: { Label(greetingRecorder.isRecording ? "Stop and save" : "Record new greeting", systemImage: greetingRecorder.isRecording ? "stop.circle.fill" : "mic.circle.fill").foregroundStyle(greetingRecorder.isRecording ? .red : relayInk) }
+            } header: { Text("Voicemail") } footer: { Text("Tap again to stop and save your greeting.") }
+            Section { LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") }
+        }.navigationTitle("Settings").overlay { if saving { ProgressView("Saving…").padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 12)) } }
     }
     private func binding(_ path: WritableKeyPath<RelaySettings, Bool>) -> Binding<Bool> { Binding(get: { session.settings[keyPath: path] }, set: { value in var next = session.settings; next[keyPath: path] = value; saving = true; Task { do { try await session.saveSettings(next) } catch { session.error = error.localizedDescription }; saving = false } }) }
+    private func recordGreeting() async {
+        do {
+            if let recording = try await greetingRecorder.toggle() { saving = true; try await session.saveVoicemailGreeting(data: recording, contentType: "audio/mp4"); saving = false }
+        } catch { saving = false; session.error = error.localizedDescription }
+    }
+}
+
+@MainActor private final class GreetingRecorder: NSObject, ObservableObject {
+    @Published private(set) var isRecording = false
+    private var recorder: AVAudioRecorder?
+    private var outputURL: URL?
+    func toggle() async throws -> Data? {
+        if isRecording { return try stop() }
+        let granted: Bool
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted: granted = true
+        case .denied: granted = false
+        default: granted = await AVAudioApplication.requestRecordPermission()
+        }
+        guard granted else { throw RelayAPIError.server("Microphone access is required to record a voicemail greeting.") }
+        let audio = AVAudioSession.sharedInstance(); try audio.setCategory(.record, mode: .spokenAudio); try audio.setActive(true)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("relay-greeting-\(UUID().uuidString).m4a")
+        recorder = try AVAudioRecorder(url: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 32_000, AVNumberOfChannelsKey: 1, AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue])
+        recorder?.record(); outputURL = url; isRecording = true
+        return nil
+    }
+    private func stop() throws -> Data? {
+        recorder?.stop(); isRecording = false; try? AVAudioSession.sharedInstance().setActive(false)
+        guard let outputURL else { return nil }; defer { try? FileManager.default.removeItem(at: outputURL); self.outputURL = nil }
+        return try Data(contentsOf: outputURL)
+    }
 }
 
 extension VoiceManager.Status {

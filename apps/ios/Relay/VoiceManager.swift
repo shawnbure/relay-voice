@@ -32,6 +32,7 @@ final class VoiceManager: NSObject, ObservableObject {
     private let callController = CXCallController()
     private var registry: PKPushRegistry?
     private var call: Call?
+    private var currentCallID: UUID?
     private var ownNumber = ""
     private var selfTarget = ""
     private var api: RelayAPI?
@@ -42,7 +43,7 @@ final class VoiceManager: NSObject, ObservableObject {
     private var audioRouteObserver: NSObjectProtocol?
 
     override init() {
-        let configuration = CXProviderConfiguration(localizedName: "Relay")
+        let configuration = CXProviderConfiguration()
         configuration.supportsVideo = false; configuration.maximumCallGroups = 1; configuration.maximumCallsPerCallGroup = 1
         configuration.supportedHandleTypes = [.phoneNumber, .generic]
         configuration.includesCallsInRecents = true
@@ -75,11 +76,12 @@ final class VoiceManager: NSObject, ObservableObject {
     func start(number: String) {
         guard canStartCall, let destination = number.e164 else { return }
         remoteNumber = destination; hasCall = true; incoming = false; status = .connecting
-        let action = CXStartCallAction(call: UUID(), handle: CXHandle(type: .phoneNumber, value: destination))
+        let id = UUID(); currentCallID = id
+        let action = CXStartCallAction(call: id, handle: CXHandle(type: .phoneNumber, value: destination))
         request(CXTransaction(action: action))
     }
-    func answer() { guard let id = call?.callInfo?.callId else { return }; request(CXTransaction(action: CXAnswerCallAction(call: id))) }
-    func hangup() { guard let id = call?.callInfo?.callId else { return }; status = .ending; request(CXTransaction(action: CXEndCallAction(call: id))) }
+    func answer() { guard let id = call?.callInfo?.callId ?? currentCallID else { return }; request(CXTransaction(action: CXAnswerCallAction(call: id))) }
+    func hangup() { guard let id = call?.callInfo?.callId ?? currentCallID else { return }; status = .ending; request(CXTransaction(action: CXEndCallAction(call: id))) }
     func sendDTMF(_ digit: String) {
         guard hasCall, digit.count == 1, "0123456789*#".contains(digit) else { return }
         call?.dtmf(dtmf: digit)
@@ -109,8 +111,8 @@ final class VoiceManager: NSObject, ObservableObject {
         return .production
         #endif
     }
-    private func request(_ transaction: CXTransaction) { callController.request(transaction) { [weak self] error in if let error { Task { @MainActor in self?.hasCall = self?.call != nil; self?.status = .failed(error.localizedDescription) } } } }
-    private func finish() { call = nil; hasCall = false; incoming = false; reportedIncomingCalls.removeAll(); remoteNumber = ""; startedAt = nil; muted = false; speaker = false; status = .ready }
+    private func request(_ transaction: CXTransaction) { callController.request(transaction) { [weak self] error in if let error { Task { @MainActor in self?.currentCallID = self?.call?.callInfo?.callId; self?.hasCall = self?.call != nil; self?.status = .failed(error.localizedDescription) } } } }
+    private func finish() { call = nil; currentCallID = nil; hasCall = false; incoming = false; reportedIncomingCalls.removeAll(); remoteNumber = ""; startedAt = nil; muted = false; speaker = false; status = .ready }
     private func reportIncomingCall(id: UUID, number: String) {
         guard reportedIncomingCalls.insert(id).inserted else { return }
         let update = CXCallUpdate(); update.remoteHandle = CXHandle(type: .phoneNumber, value: number); update.localizedCallerName = number.e164?.displayPhone ?? number; update.hasVideo = false; update.supportsDTMF = true; update.supportsHolding = true; update.supportsGrouping = false; update.supportsUngrouping = false
@@ -177,6 +179,7 @@ extension VoiceManager: TxClientDelegate {
         Task { @MainActor in
             self.call = call; self.hasCall = true; self.incoming = true; self.remoteNumber = call.callInfo?.callerNumber ?? "Unknown"; self.status = .ringing
             guard let id = call.callInfo?.callId else { return }
+            self.currentCallID = id
             self.reportIncomingCall(id: id, number: self.remoteNumber)
         }
     }

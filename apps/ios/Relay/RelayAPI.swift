@@ -36,6 +36,13 @@ final class RelayAPI {
         return try JSONDecoder.relay.decode(T.self, from: data)
     }
     func mediaRequest(_ path: String) -> URLRequest { var request = URLRequest(url: URL(string: path, relativeTo: baseURL)!); if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }; return request }
+    func upload(_ path: String, data: Data, contentType: String) async throws {
+        var request = mediaRequest(path); request.httpMethod = "PUT"; request.httpBody = data; request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        let (responseData, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw RelayAPIError.invalidResponse }
+        if http.statusCode == 401 { throw RelayAPIError.unauthorized }
+        guard (200..<300).contains(http.statusCode) else { throw RelayAPIError.server((try? JSONDecoder().decode(APIErrorBody.self, from: responseData).error) ?? "Relay upload failed (\(http.statusCode)).") }
+    }
 }
 
 private struct APIErrorBody: Decodable { let error: String }

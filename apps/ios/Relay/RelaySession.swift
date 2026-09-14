@@ -11,6 +11,7 @@ final class RelaySession: ObservableObject {
     @Published private(set) var activityRevision = 0
     let voice = VoiceManager()
     private var events: URLSessionWebSocketTask?
+    private var eventHeartbeat: Task<Void, Never>?
 
     func restore() async {
         if RelayAPI.shared.token == nil,
@@ -61,6 +62,10 @@ final class RelaySession: ObservableObject {
         conversations.removeAll { $0.peer == normalized }
     }
     func saveSettings(_ value: RelaySettings) async throws { let _: EmptyResponse = try await RelayAPI.shared.request("/v1/settings", method: "PUT", body: value); settings = value }
+    func saveVoicemailGreeting(data: Data, contentType: String) async throws {
+        try await RelayAPI.shared.upload("/v1/settings/voicemail-greeting", data: data, contentType: contentType)
+        settings.hasVoicemailGreeting = true; settings.voicemailUpdatedAt = .now
+    }
     private func startEvents() {
         guard events == nil else { return }
         var components = URLComponents(url: RelayAPI.shared.baseURL, resolvingAgainstBaseURL: false)!
@@ -68,8 +73,16 @@ final class RelaySession: ObservableObject {
         components.path = "/v1/events"; components.query = nil
         var request = URLRequest(url: components.url!); if let token = RelayAPI.shared.token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         events = URLSession.shared.webSocketTask(with: request); events?.resume(); receiveEvent()
+        eventHeartbeat?.cancel()
+        eventHeartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(20))
+                guard !Task.isCancelled, let socket = self?.events else { return }
+                socket.sendPing { _ in }
+            }
+        }
     }
-    private func receiveEvent() { events?.receive { [weak self] result in Task { @MainActor in guard let self else { return }; if case .success = result { self.activityRevision += 1; await self.refresh(); self.receiveEvent() } else { self.events = nil; try? await Task.sleep(for: .seconds(2)); self.startEvents() } } } }
+    private func receiveEvent() { events?.receive { [weak self] result in Task { @MainActor in guard let self else { return }; if case .success = result { self.activityRevision += 1; await self.refresh(); self.receiveEvent() } else { self.events = nil; self.eventHeartbeat?.cancel(); self.eventHeartbeat = nil; try? await Task.sleep(for: .seconds(2)); self.startEvents() } } } }
     private func isTransientNetworkError(_ error: Error) -> Bool {
         guard let urlError = error as? URLError else { return false }
         return [.networkConnectionLost, .notConnectedToInternet, .timedOut, .cannotConnectToHost, .cannotFindHost].contains(urlError.code)
