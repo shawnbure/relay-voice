@@ -10,8 +10,10 @@ Relay is a self-hosted communications inbox and softphone built with Telnyx, Clo
 - Unified call, SMS, MMS, and voicemail history
 - Browser calling through the Telnyx WebRTC SDK
 - Native iOS calling with SwiftUI, CallKit, PushKit, and DTMF
-- Passkey authentication and revocable iOS device credentials
+- Password authentication, optional passkey fallback, and revocable iOS device credentials
 - Real-time updates over Cloudflare Durable Object WebSockets
+- APNs alerts for incoming SMS/MMS, missed calls, and ready voicemail, with shared unread badges
+- Cross-client conversation archive and full-history search
 - Multi-tenant D1 schema and R2 media storage
 
 ## Repository layout
@@ -81,7 +83,20 @@ The web client runs at `http://localhost:5173`; the Worker runs at `http://local
    npm run deploy -w @relay/api
    ```
 
-6. Open the deployed site and create the owner passkey. Public registration closes after the first passkey is registered.
+6. Open the deployed site and create the owner account with a password of at least 12 characters. Public registration closes immediately after the hostname is assigned to that workspace.
+
+### Multiple domains and workspaces
+
+Relay can serve multiple isolated workspaces from one Worker and D1 database. Migration `0010_domain_password_auth.sql` adds the hostname-to-workspace mapping. Every request resolves its tenant through `tenant_domains`, so sessions cannot cross into a workspace assigned to another hostname.
+
+Add each hostname as a Worker custom domain, then either open an unassigned hostname to complete its one-time owner setup or insert a mapping administratively:
+
+```sql
+INSERT INTO tenant_domains (hostname, tenant_id)
+VALUES ('voice.example.com', '<TENANT_ID>');
+```
+
+Passwords are salted PBKDF2-SHA256 hashes; Relay never stores plaintext passwords in D1. Owners can set or rotate their web password in Settings. Login attempts are throttled by hostname and a hash of the client address. Existing passkeys continue to work only on the RP hostname where they were created.
 
 See Cloudflare's current documentation for [D1 creation](https://developers.cloudflare.com/d1/wrangler-commands/), [R2 bindings](https://developers.cloudflare.com/r2/get-started/workers-api/), and [custom domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/).
 
@@ -120,6 +135,17 @@ cd apps/api
 npx wrangler d1 execute DB --remote --command \
   "SELECT tenant_id, user_id FROM memberships WHERE role='owner';"
 ```
+
+An authenticated workspace owner can also attach a number that is already present in the same Telnyx account. Relay reuses the configured messaging and voice applications while creating a tenant-specific WebRTC credential:
+
+```http
+POST /v1/admin/phone-number
+Content-Type: application/json
+
+{"e164":"+15551234567"}
+```
+
+The endpoint accepts only one unassigned E.164 number per workspace and records the change in the audit log.
 
 Telnyx requirements differ by region and number type. Follow the current [Telnyx documentation](https://developers.telnyx.com/) before carrying production traffic.
 

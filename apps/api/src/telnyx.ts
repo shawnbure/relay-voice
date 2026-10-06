@@ -204,6 +204,56 @@ export async function provisionExistingTelnyxNumber(apiKey: string, input: { e16
 
 export type SentMessage = { id: string; from: string; to: string; text: string; status: string; occurredAt: string };
 
+export type TelnyxMessageDetail = { status: string | null; deliveredAt: string | null; errorCode: string | null; errorDetail: string | null };
+
+export type TelnyxMessageMedia = { url: string; contentType: string; size?: number };
+
+export async function getTelnyxMessageMedia(apiKey: string, messageId: string): Promise<TelnyxMessageMedia[]> {
+  const data = dataOf(await telnyxJson(apiKey, "GET", `/messages/${encodeURIComponent(messageId)}`));
+  if (!data || typeof data !== "object") throw new Error("Telnyx returned an invalid message detail response");
+  const media = "media" in data && Array.isArray(data.media) ? data.media : [];
+  return media.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const url = stringField(item, "url");
+    if (!url) return [];
+    const sizeValue = "size" in item && typeof item.size === "number" ? item.size : undefined;
+    return [{ url, contentType: stringField(item, "content_type") || "application/octet-stream", size: sizeValue }];
+  });
+}
+
+export async function getTelnyxMessageDetail(apiKey: string, messageId: string): Promise<TelnyxMessageDetail> {
+  const data = dataOf(await telnyxJson(apiKey, "GET", `/messages/${encodeURIComponent(messageId)}`));
+  if (!data || typeof data !== "object") throw new Error("Telnyx returned an invalid message detail response");
+  const destinations = "to" in data && Array.isArray(data.to) ? data.to : [];
+  const status = destinations[0] && typeof destinations[0] === "object" ? stringField(destinations[0], "status") : null;
+  const errors = "errors" in data && Array.isArray(data.errors) ? data.errors : [];
+  const firstError = errors[0];
+  const deliveredAt = stringField(data, "completed_at") || (status === "delivered" ? stringField(data, "sent_at") : null);
+  if (typeof firstError === "string" || typeof firstError === "number") return { status, deliveredAt, errorCode: String(firstError), errorDetail: null };
+  return { status, deliveredAt, errorCode: stringField(firstError, "code"), errorDetail: stringField(firstError, "detail") || stringField(firstError, "title") };
+}
+
+export async function inspectTelnyx10dlcAssignment(apiKey: string, e164: string): Promise<Record<string, unknown> | null> {
+  const response = await fetch(`https://api.telnyx.com/v2/10dlc/phone_number_campaigns/${encodeURIComponent(e164)}`, {
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+  });
+  if (response.status === 404) return null;
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`Telnyx 10DLC assignment lookup failed (${response.status})`);
+  const data = payload && typeof payload === "object" && "data" in payload ? payload.data : payload;
+  return data && typeof data === "object" ? data as Record<string, unknown> : null;
+}
+
+export async function inspectTelnyx10dlcCampaign(apiKey: string, campaignId: string): Promise<Record<string, unknown> | null> {
+  const response = await fetch(`https://api.telnyx.com/v2/10dlc/campaignBuilder/${encodeURIComponent(campaignId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`Telnyx 10DLC campaign lookup failed (${response.status})`);
+  const data = payload && typeof payload === "object" && "data" in payload ? payload.data : payload;
+  return data && typeof data === "object" ? data as Record<string, unknown> : null;
+}
+
 export async function sendTelnyxMessage(apiKey: string, input: { from: string; to: string; text: string; webhookUrl: string; mediaUrls?: string[] }): Promise<SentMessage> {
   const response = await fetch("https://api.telnyx.com/v2/messages", {
     method: "POST",

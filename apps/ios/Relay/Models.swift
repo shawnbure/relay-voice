@@ -12,13 +12,13 @@ struct RelayIdentity: Decodable {
 enum ActivityKind: String, Decodable { case message, call, voicemail }
 struct Conversation: Decodable, Identifiable, Hashable {
     var id: String { peer }
-    let peer: String; let displayName: String; let body: String; let direction: String; let status: String; let occurredAt: Date; let kind: ActivityKind
-    enum CodingKeys: String, CodingKey { case peer, displayName = "display_name", body, direction, status, occurredAt = "occurred_at", kind }
+    let peer: String; let displayName: String; let body: String; let direction: String; let status: String; let occurredAt: Date; let kind: ActivityKind; var muted = false
+    enum CodingKeys: String, CodingKey { case peer, displayName = "display_name", body, direction, status, occurredAt = "occurred_at", kind, muted }
 }
 struct MediaItem: Decodable, Hashable { let key: String; let contentType: String; let size: Int? }
 struct ActivityItem: Decodable, Identifiable, Hashable {
-    let id: String; let kind: ActivityKind; let direction: String; let body: String; let status: String; let occurredAt: Date; let media: [MediaItem]; let durationSeconds: Int?
-    enum CodingKeys: String, CodingKey { case id, kind, direction, body, status, occurredAt = "occurred_at", media, durationSeconds = "duration_seconds" }
+    let id: String; let kind: ActivityKind; let direction: String; let body: String; let status: String; let occurredAt: Date; let deliveredAt: Date?; let media: [MediaItem]; let durationSeconds: Int?
+    enum CodingKeys: String, CodingKey { case id, kind, direction, body, status, occurredAt = "occurred_at", deliveredAt = "delivered_at", media, durationSeconds = "duration_seconds" }
 }
 struct RelaySettings: Codable {
     var receiveWeb: Bool; var receiveMobile: Bool; var voicemailEnabled: Bool; var hasVoicemailGreeting: Bool; var voicemailUpdatedAt: Date?

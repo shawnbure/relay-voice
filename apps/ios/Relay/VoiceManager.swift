@@ -229,6 +229,7 @@ extension VoiceManager: PKPushRegistryDelegate {
             }
             let metadata = (rawPayload["metadata"] as? [String: Any]) ?? payloadStrings
             if let rawID = metadata["call_id"] as? String, let id = UUID(uuidString: rawID) {
+                self.currentCallID = id
                 let caller = (metadata["caller_name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (metadata["caller_number"] as? String) ?? "Unknown caller"
                 self.remoteNumber = caller; self.incoming = true; self.hasCall = true; self.status = .ringing
                 self.reportIncomingCall(id: id, number: caller)

@@ -1,5 +1,6 @@
 import AVFoundation
 import Contacts
+import Photos
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -45,11 +46,12 @@ private struct ConnectView: View {
 
 private struct MainTabs: View {
     @EnvironmentObject private var voice: VoiceManager
+    @EnvironmentObject private var session: RelaySession
     @State private var selectedTab = 0
     @State private var conversationPath: [ConversationRoute] = []
     var body: some View {
         TabView(selection: $selectedTab) {
-            NavigationStack(path: $conversationPath) { ConversationsView(path: $conversationPath) }.tabItem { Label("Conversations", image: "CommunicationTab") }.tag(0)
+            NavigationStack(path: $conversationPath) { ConversationsView(path: $conversationPath) }.tabItem { Label("Conversations", image: "CommunicationTab") }.badge(session.unreadCount).tag(0)
             NavigationStack { DialerView { number in
                 conversationPath = [.message(Conversation(peer: number, displayName: number, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message))]
                 selectedTab = 0
@@ -57,6 +59,11 @@ private struct MainTabs: View {
             NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
         }
         .toolbarBackground(.visible, for: .tabBar)
+        .onChange(of: session.notificationPeer) { _, peer in
+            guard let peer else { return }
+            let conversation = session.conversations.first { $0.peer == peer } ?? Conversation(peer: peer, displayName: peer, body: "", direction: "inbound", status: "received", occurredAt: .now, kind: .message)
+            selectedTab = 0; conversationPath = [.history(conversation)]; session.notificationPeer = nil
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) { if voice.isInCall { CallBar().padding(.horizontal, 10).padding(.vertical, 6) } }
         .overlay { if voice.incoming { IncomingCallView() } }
     }
@@ -67,34 +74,91 @@ private struct ConversationsView: View {
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
     @State private var query = ""
-    @State private var pendingDelete: Conversation?
     @State private var localContactNames: [String: String] = [:]
-    private var conversations: [Conversation] { query.isEmpty ? session.conversations : session.conversations.filter { displayName(for: $0).localizedCaseInsensitiveContains(query) || $0.peer.phoneDigits.contains(query.phoneDigits) } }
+    @State private var showingArchive = false
+    @State private var searchResults: [Conversation] = []
+    @State private var numberCopied = false
+    @State private var copyFeedbackTask: Task<Void, Never>?
+    private var conversations: [Conversation] { query.isEmpty && !showingArchive ? session.conversations : searchResults }
     var body: some View {
-        List(conversations) { conversation in
+        List {
+            ForEach(conversations) { conversation in
             HStack(spacing: 12) {
+                if session.isUnread(conversation) { Circle().fill(Color.blue).frame(width: 8, height: 8).accessibilityLabel("Unread") }
                 Button { if conversation.kind == .message { path.append(.message(named(conversation))) } else { voice.start(number: conversation.peer) } } label: {
                     Circle().fill(relayGreen.opacity(0.48)).frame(width: 48, height: 48).overlay(Image(systemName: conversation.kind == .message ? "message.fill" : "phone.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(relayInk))
                 }.buttonStyle(.plain).disabled(conversation.kind != .message && !voice.canStartCall).accessibilityLabel(conversation.kind == .message ? "Message \(conversation.peer.displayPhone)" : "Call \(conversation.peer.displayPhone)")
                 Button { path.append(.history(named(conversation))) } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack { Text(displayName(for: conversation)).font(.headline).foregroundStyle(.primary).lineLimit(1); Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                        HStack { Text(displayName(for: conversation)).font(.headline).foregroundStyle(.primary).lineLimit(1); if conversation.muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Notifications silenced") }; Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         Label(conversation.body.isEmpty ? conversation.kind.summary : conversation.body, systemImage: conversation.kind.icon).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityHint("Opens complete communication history")
-            }.padding(.vertical, 5).swipeActions(edge: .trailing) { Button("Delete", systemImage: "trash", role: .destructive) { pendingDelete = conversation } }
+            }.padding(.vertical, 5).swipeActions(edge: .leading) {
+                Button(showingArchive ? "Restore" : "Archive", systemImage: "archivebox") { Task { do { try await session.archive(peer: conversation.peer, archived: !showingArchive); await search() } catch { session.error = error.localizedDescription } } }.tint(.indigo)
+                Button(conversation.muted ? "Unmute" : "Silence", systemImage: conversation.muted ? "bell" : "bell.slash") { Task { await mute(conversation) } }.tint(conversation.muted ? .green : .orange)
+            }.swipeActions(edge: .trailing) { Button("Delete", systemImage: "trash", role: .destructive) { Task { await delete(conversation) } } }
         }
-        .listStyle(.plain).navigationTitle("Relay")
-        .searchable(text: $query, prompt: "Names or phone numbers")
+        }
+        .listStyle(.plain).navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                Text(session.identity?.phone?.e164.displayPhone ?? "Conversations")
+                    .font(.title2.bold()).lineLimit(1).minimumScaleFactor(0.75)
+                    .contentShape(Rectangle()).highPriorityGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+                        if let number = session.identity?.phone?.e164 {
+                            UIPasteboard.general.string = number.displayPhone
+                            numberCopied = true
+                            copyFeedbackTask?.cancel()
+                            copyFeedbackTask = Task { @MainActor in
+                                try? await Task.sleep(for: .seconds(2))
+                                guard !Task.isCancelled else { return }
+                                numberCopied = false
+                            }
+                            UINotificationFeedbackGenerator().notificationOccurred(.success)
+                            UIAccessibility.post(notification: .announcement, argument: "Phone number copied")
+                        }
+                    })
+                    .accessibilityHint("Long press to copy your phone number")
+                    .overlay(alignment: .bottomLeading) {
+                        if numberCopied {
+                            Label("Copied", systemImage: "checkmark.circle.fill")
+                                .font(.caption.weight(.semibold)).foregroundStyle(Color.primary)
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(.regularMaterial, in: Capsule())
+                                .offset(y: 30).allowsHitTesting(false)
+                        }
+                    }.zIndex(1)
+                    Spacer(minLength: 0)
+                    NavigationLink { NewConversationView() } label: { Image(systemName: "square.and.pencil").font(.title2).frame(width: 44, height: 44) }.accessibilityLabel("New conversation")
+                }
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search numbers and messages", text: $query).autocorrectionDisabled().textInputAutocapitalization(.never)
+                    if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.accessibilityLabel("Clear search") }
+                }.padding(12).background(Color(.secondarySystemBackground)).clipShape(RoundedRectangle(cornerRadius: 12))
+                Picker("Conversations", selection: $showingArchive) { Text("Inbox").tag(false); Text("Archived").tag(true) }.pickerStyle(.segmented)
+            }.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 14).background(.bar)
+        }
         .navigationDestination(for: ConversationRoute.self) { route in switch route { case .history(let conversation): ThreadView(conversation: conversation, startComposing: false); case .message(let conversation): ThreadView(conversation: conversation, startComposing: true) } }
         .refreshable { await session.refresh() }
         .task { localContactNames = await loadLocalContactNames() }
+        .task(id: "\(query)|\(showingArchive)|\(session.activityRevision)") { await search() }
         .overlay { if conversations.isEmpty { ContentUnavailableView(query.isEmpty ? "No conversations" : "No results", systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass", description: Text(query.isEmpty ? "Tap compose to call or message a new number." : "Try a different name or phone number.")) } }
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { NavigationLink { NewConversationView() } label: { Label("New", systemImage: "square.and.pencil") } } }
-        .confirmationDialog("Delete conversation?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), titleVisibility: .visible) { Button("Delete all history", role: .destructive) { if let conversation = pendingDelete { Task { await delete(conversation) } }; pendingDelete = nil }; Button("Cancel", role: .cancel) { pendingDelete = nil } } message: { Text("This permanently deletes the messages, calls, and voicemails in this conversation from Relay.") }
+        .toolbar(.hidden, for: .navigationBar)
     }
     private func displayName(for conversation: Conversation) -> String { conversation.displayName == conversation.peer ? localContactNames[conversation.peer] ?? conversation.peer.displayPhone : conversation.displayName }
-    private func named(_ conversation: Conversation) -> Conversation { Conversation(peer: conversation.peer, displayName: displayName(for: conversation), body: conversation.body, direction: conversation.direction, status: conversation.status, occurredAt: conversation.occurredAt, kind: conversation.kind) }
+    private func search() async {
+        do {
+            try await Task.sleep(for: .milliseconds(250))
+            let result = try await session.searchConversations(query: query, archived: showingArchive)
+            guard !Task.isCancelled else { return }
+            searchResults = result
+        } catch { if !Task.isCancelled { session.error = error.localizedDescription } }
+    }
+    private func named(_ conversation: Conversation) -> Conversation { Conversation(peer: conversation.peer, displayName: displayName(for: conversation), body: conversation.body, direction: conversation.direction, status: conversation.status, occurredAt: conversation.occurredAt, kind: conversation.kind, muted: conversation.muted) }
+    private func mute(_ conversation: Conversation) async { do { try await session.mute(peer: conversation.peer, muted: !conversation.muted); await search() } catch { session.error = error.localizedDescription } }
     private func delete(_ conversation: Conversation) async { do { try await session.deleteConversation(peer: conversation.peer) } catch { session.error = error.localizedDescription } }
 }
 
@@ -125,15 +189,57 @@ private struct ThreadView: View {
     @State private var showingCamera = false
     @State private var showingFiles = false
     @StateObject private var recorder = MessageAudioRecorder()
+    @State private var lastSendAt = Date.distantPast
     @FocusState private var composerFocused: Bool
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 10) { if activity.isEmpty { ContentUnavailableView("No history yet", systemImage: "bubble.left", description: Text("Send a message or tap the phone button to start." )).padding(.top, 90) }; ForEach(activity) { item in ActivityRow(item: item).id(item.id).contextMenu { if item.kind == .message { if !item.body.isEmpty { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = item.body } }; Button("Delete message", systemImage: "trash", role: .destructive) { Task { await delete(item) } } } } } }.padding() }.scrollDismissesKeyboard(.interactively).defaultScrollAnchor(.bottom).onChange(of: activity) { _, value in if let last = value.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } } }
-            MessageComposer(draft: $draft, attachment: $attachment, photoItem: $photoItem, showingCamera: $showingCamera, showingFiles: $showingFiles, sending: sending, recording: recorder.isRecording, focused: $composerFocused, onRecord: recordAudio) { Task { await send() } }
-        }.navigationTitle(conversation.displayName == conversation.peer ? conversation.peer.displayPhone : conversation.displayName).navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { voice.start(number: conversation.peer) } label: { Image(systemName: "phone.fill") }.disabled(!voice.canStartCall).accessibilityLabel("Call") } }.task { await load(); if startComposing { composerFocused = true } }.onChange(of: session.activityRevision) { _, _ in Task { await load() } }.onChange(of: photoItem) { _, item in Task { await loadPhoto(item) } }.sheet(isPresented: $showingCamera) { CameraPicker { image in if let data = image.jpegData(compressionQuality: 0.82) { attachment = OutgoingAttachment(name: "photo.jpg", contentType: "image/jpeg", data: data) } } }.fileImporter(isPresented: $showingFiles, allowedContentTypes: [.image, .audio, .movie, .pdf]) { result in loadFile(result) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        if activity.isEmpty {
+                            ContentUnavailableView("No history yet", systemImage: "bubble.left", description: Text("Send a message or tap the phone button to start.")).padding(.top, 90)
+                        }
+                        ForEach(activity) { item in
+                            ActivityRow(item: item).id(item.id).contextMenu {
+                                if item.kind == .message {
+                                    if !item.body.isEmpty { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = item.body } }
+                                    Button("Delete message", systemImage: "trash", role: .destructive) { Task { await delete(item) } }
+                                }
+                            }
+                        }
+                        Color.clear.frame(height: 20).id("thread-bottom")
+                    }.padding(.horizontal, 16).padding(.top, 16)
+                }
+                .frame(maxHeight: .infinity)
+                .scrollDismissesKeyboard(.interactively)
+                .defaultScrollAnchor(.bottom)
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                    withAnimation { proxy.scrollTo("thread-bottom", anchor: .bottom) }
+                }
+                .onChange(of: activity) { _, _ in
+                    withAnimation { proxy.scrollTo("thread-bottom", anchor: .bottom) }
+                }
+            }
+            MessageComposer(draft: $draft, attachment: $attachment, photoItem: $photoItem, showingCamera: $showingCamera, showingFiles: $showingFiles, sending: sending, recording: recorder.isRecording, focused: $composerFocused, onRecord: recordAudio, onSend: send)
+        }.onDisappear { session.setVisiblePeer(nil) }.navigationTitle(conversation.displayName == conversation.peer ? conversation.peer.displayPhone : conversation.displayName).navigationBarTitleDisplayMode(.inline).toolbar(.visible, for: .navigationBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { voice.start(number: conversation.peer) } label: { Image(systemName: "phone.fill") }.disabled(!voice.canStartCall).accessibilityLabel("Call") } }.task { await load(); if startComposing { composerFocused = true } }.onChange(of: session.activityRevision) { _, _ in Task { await load() } }.onChange(of: photoItem) { _, item in Task { await loadPhoto(item) } }.sheet(isPresented: $showingCamera) { CameraPicker { image in if let data = image.jpegData(compressionQuality: 0.82) { attachment = OutgoingAttachment(name: "photo.jpg", contentType: "image/jpeg", data: data) } } }.fileImporter(isPresented: $showingFiles, allowedContentTypes: [.image, .audio, .movie, .pdf]) { result in loadFile(result) }
     }
-    private func load() async { do { activity = try await session.activity(peer: conversation.peer) } catch { session.error = error.localizedDescription } }
-    private func send() async { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty || attachment != nil else { return }; sending = true; do { try await session.send(to: conversation.peer, text: text, attachment: attachment); draft = ""; attachment = nil; photoItem = nil; await load() } catch { session.error = error.localizedDescription }; sending = false }
+    private func load() async { do { activity = try await session.activity(peer: conversation.peer); session.setVisiblePeer(conversation.peer) } catch { session.error = error.localizedDescription } }
+    private func send() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let outgoingAttachment = attachment
+        guard (!text.isEmpty || outgoingAttachment != nil), !sending, Date().timeIntervalSince(lastSendAt) >= 0.4 else { return }
+        lastSendAt = .now; sending = true; draft = ""; attachment = nil; photoItem = nil
+        let pending = ActivityItem(id: "pending-\(UUID().uuidString)", kind: .message, direction: "outbound", body: text, status: "sending", occurredAt: .now, deliveredAt: nil, media: [], durationSeconds: nil)
+        activity.append(pending)
+        Task {
+            do { try await session.send(to: conversation.peer, text: text, attachment: outgoingAttachment); await load() }
+            catch {
+                activity.removeAll { $0.id == pending.id }
+                session.error = error.localizedDescription
+            }
+            sending = false
+        }
+    }
     private func delete(_ item: ActivityItem) async { do { try await session.deleteMessage(id: item.id); activity.removeAll { $0.id == item.id }; await session.refresh() } catch { session.error = error.localizedDescription } }
     private func loadPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; attachment = OutgoingAttachment(name: "photo.jpg", contentType: item.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg", data: data) }
     private func loadFile(_ result: Result<URL, Error>) { do { let url = try result.get(); let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); attachment = OutgoingAttachment(name: url.lastPathComponent, contentType: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream", data: data) } catch { session.error = error.localizedDescription } }
@@ -174,9 +280,9 @@ private struct MessageComposer: View {
                 if draft.isEmpty && attachment == nil {
                     Button(action: onRecord) { Image(systemName: recording ? "stop.fill" : "waveform").font(.headline).frame(width: 36, height: 36).background(recording ? Color.red : Color(.tertiarySystemFill)).foregroundStyle(recording ? .white : Color.primary).clipShape(Circle()) }.accessibilityLabel(recording ? "Stop voice message" : "Record voice message")
                 } else {
-                    Button(action: onSend) { Image(systemName: "arrow.up").font(.headline.bold()).frame(width: 36, height: 36).background(canSend ? relayGreen : Color(.tertiarySystemFill)).foregroundStyle(canSend ? relayInk : Color.secondary).clipShape(Circle()) }.disabled(!canSend || sending).accessibilityLabel("Send")
+                    Button(action: onSend) { Group { if sending { ProgressView().tint(relayInk) } else { Image(systemName: "arrow.up").font(.headline.bold()) } }.frame(width: 36, height: 36).background(canSend || sending ? relayGreen : Color(.tertiarySystemFill)).foregroundStyle(canSend || sending ? relayInk : Color.secondary).clipShape(Circle()) }.disabled(!canSend || sending).accessibilityLabel(sending ? "Sending" : "Send")
                 }
-            }.padding(.horizontal, 10).padding(.bottom, 8)
+            }.padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 8)
         }.background(.bar)
     }
 }
@@ -216,12 +322,25 @@ private struct CameraPicker: UIViewControllerRepresentable {
 
 private struct ActivityRow: View {
     let item: ActivityItem
+    private static let messageDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MM/dd/yy h:mm a"
+        return formatter
+    }()
     var body: some View {
         if item.kind == .message {
-            HStack { if item.direction == "outbound" { Spacer(minLength: 42) }; VStack(alignment: .leading, spacing: 7) { if !item.body.isEmpty { Text(item.body) }; ForEach(Array(item.media.enumerated()), id: \.offset) { index, media in MessageAttachment(messageID: item.id, index: index, media: media) }; Text(item.occurredAt, style: .time).font(.caption2).opacity(0.62) }.foregroundStyle(item.direction == "outbound" ? relayInk : Color.primary).padding(12).background(item.direction == "outbound" ? relayGreen : Color(.secondarySystemBackground)).clipShape(RoundedRectangle(cornerRadius: 16)); if item.direction == "inbound" { Spacer(minLength: 42) } }
+            HStack { if item.direction == "outbound" { Spacer(minLength: 42) }; VStack(alignment: .leading, spacing: 7) { if !item.body.isEmpty { Text(item.body) }; ForEach(Array(item.media.enumerated()), id: \.offset) { index, media in MessageAttachment(messageID: item.id, index: index, media: media) }; Text(messageTiming).font(.caption2).opacity(0.62) }.foregroundStyle(item.direction == "outbound" ? relayInk : Color.primary).padding(12).background(item.direction == "outbound" ? relayGreen : Color(.secondarySystemBackground)).clipShape(RoundedRectangle(cornerRadius: 16)); if item.direction == "inbound" { Spacer(minLength: 42) } }
         } else {
             HStack { Image(systemName: item.kind.icon).frame(width: 35, height: 35).background(relayGreen.opacity(0.3)).clipShape(RoundedRectangle(cornerRadius: 10)); VStack(alignment: .leading) { Text(item.kind == .call ? (item.direction == "inbound" ? "Incoming call" : "Outgoing call") : "Voicemail").font(.subheadline.bold()); Text([item.occurredAt.formatted(date: .omitted, time: .shortened), item.status, item.durationSeconds.map(formatDuration)].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }; Spacer(); if item.kind == .voicemail && item.status == "ready" { VoicemailButton(id: item.id) } }.padding(12).background(Color(.secondarySystemBackground)).clipShape(RoundedRectangle(cornerRadius: 14))
         }
+    }
+    private var messageTiming: String {
+        let occurred = Self.messageDateTimeFormatter.string(from: item.occurredAt)
+        if item.direction == "inbound" { return "Received \(occurred)" }
+        if let deliveredAt = item.deliveredAt { return "Delivered \(Self.messageDateTimeFormatter.string(from: deliveredAt))" }
+        if item.status.contains("failed") { return "Failed \(occurred)" }
+        return "Sent \(occurred)"
     }
 }
 
@@ -233,16 +352,74 @@ private struct VoicemailButton: View {
 private struct MessageAttachment: View {
     let messageID: String; let index: Int; let media: MediaItem
     @State private var image: UIImage?
+    @State private var loading = false
+    @State private var failed = false
+    @State private var showingPreview = false
     private var path: String { "/v1/messages/\(messageID)/media/\(index)" }
     var body: some View {
         Group {
             if media.contentType.hasPrefix("image/") {
-                if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 260).clipShape(RoundedRectangle(cornerRadius: 10)) } else { ProgressView().frame(width: 120, height: 90).task { await loadImage() } }
+                if let image { Button { showingPreview = true } label: { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 260).clipShape(RoundedRectangle(cornerRadius: 10)) }.buttonStyle(.plain).accessibilityLabel("Open image full screen") }
+                else if failed { Button { Task { await loadImage() } } label: { Label("Tap to retry image", systemImage: "arrow.clockwise") }.buttonStyle(.bordered) }
+                else { ProgressView().frame(width: 120, height: 90).task { await loadImage() } }
             } else if media.contentType.hasPrefix("audio/") { Button { Task { _ = await AudioPlayback.shared.toggle(path: path) } } label: { Label("Play audio", systemImage: "play.circle.fill") } }
             else { Label("Attachment", systemImage: "paperclip") }
         }
+        .fullScreenCover(isPresented: $showingPreview) { if let image { ImagePreview(image: image) } }
     }
-    private func loadImage() async { if let (data, _) = try? await URLSession.shared.data(for: RelayAPI.shared.mediaRequest(path)) { image = UIImage(data: data) } }
+    private func loadImage() async {
+        guard !loading else { return }
+        loading = true; failed = false
+        defer { loading = false }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: RelayAPI.shared.mediaRequest(path))
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let decoded = UIImage(data: data) else { throw URLError(.cannotDecodeContentData) }
+            image = decoded
+        } catch { failed = true }
+    }
+}
+
+private struct ImagePreview: View {
+    let image: UIImage
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingShare = false
+    @State private var saved = false
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                Image(uiImage: image).resizable().scaledToFit().scaleEffect(scale)
+                    .gesture(MagnifyGesture().onChanged { value in scale = min(max(lastScale * value.magnification, 1), 5) }.onEnded { _ in lastScale = scale })
+                    .onTapGesture(count: 2) { withAnimation { scale = scale > 1 ? 1 : 2; lastScale = scale } }
+            }
+            .navigationTitle("Photo").navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.black, for: .navigationBar).toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { save() } label: { Image(systemName: saved ? "checkmark" : "square.and.arrow.down") }.accessibilityLabel(saved ? "Saved to Photos" : "Save to Photos")
+                    Button { showingShare = true } label: { Image(systemName: "square.and.arrow.up") }.accessibilityLabel("Share image")
+                }
+            }
+        }
+        .sheet(isPresented: $showingShare) { ActivityShare(items: [image]) }
+    }
+    private func save() {
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else { return }
+            PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: image) } completionHandler: { success, _ in
+                if success { Task { @MainActor in saved = true; UINotificationFeedbackGenerator().notificationOccurred(.success) } }
+            }
+        }
+    }
+}
+
+private struct ActivityShare: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: items, applicationActivities: nil) }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 @MainActor final class AudioPlayback: NSObject, AVAudioPlayerDelegate {
@@ -284,7 +461,7 @@ private struct NewConversationView: View {
                 Button { if let destination { voice.start(number: destination) } } label: { Label("Call", systemImage: "phone.fill").frame(maxWidth: .infinity).frame(height: 50) }.buttonStyle(.borderedProminent).tint(relayGreen).foregroundStyle(relayInk).disabled(destination == nil || !voice.canStartCall)
             }.padding(.horizontal).padding(.vertical, 10).background(.bar)
         }
-        .navigationTitle("New")
+        .navigationTitle("New").toolbar(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { numberFocused = false } } }
         .task { numberFocused = true }
