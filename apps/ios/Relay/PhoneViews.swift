@@ -62,28 +62,42 @@ struct DialerView: View {
                 Spacer(minLength: 18)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.navigationTitle("Keypad").navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $showingContacts) { ContactPhonePicker { number = $0 } }
+            .background(ContactPhonePicker(isPresented: $showingContacts) { number = $0 })
     }
 }
 
+/// Presents the system contact picker from UIKit. Wrapping CNContactPickerViewController directly in a SwiftUI
+/// sheet leaves an empty host sheet behind and drops the selection callback, so present it modally instead.
 struct ContactPhonePicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
     let onSelect: (String) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
-    func makeUIViewController(context: Context) -> CNContactPickerViewController {
+    func makeUIViewController(context: Context) -> UIViewController { UIViewController() }
+    func updateUIViewController(_ host: UIViewController, context: Context) {
+        context.coordinator.parent = self
+        guard isPresented, host.presentedViewController == nil else { return }
         let picker = CNContactPickerViewController()
         picker.delegate = context.coordinator
-        picker.displayedPropertyKeys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactPhoneNumbersKey]
+        picker.displayedPropertyKeys = [CNContactPhoneNumbersKey]
         picker.predicateForEnablingContact = NSPredicate(format: "phoneNumbers.@count > 0")
-        picker.predicateForSelectionOfContact = NSPredicate(value: false)
-        return picker
+        // A contact with one number is picked immediately; contacts with several numbers open so one can be chosen.
+        picker.predicateForSelectionOfContact = NSPredicate(format: "phoneNumbers.@count == 1")
+        DispatchQueue.main.async { host.present(picker, animated: true) }
     }
-    func updateUIViewController(_ uiViewController: CNContactPickerViewController, context: Context) {}
     final class Coordinator: NSObject, CNContactPickerDelegate {
-        let parent: ContactPhonePicker
+        var parent: ContactPhonePicker
         init(parent: ContactPhonePicker) { self.parent = parent }
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
+            finish(contact.phoneNumbers.first?.value)
+        }
         func contactPicker(_ picker: CNContactPickerViewController, didSelect contactProperty: CNContactProperty) {
-            guard let phone = contactProperty.value as? CNPhoneNumber, let normalized = phone.stringValue.e164 else { return }
-            parent.onSelect(normalized)
+            finish(contactProperty.value as? CNPhoneNumber)
+        }
+        func contactPickerDidCancel(_ picker: CNContactPickerViewController) { parent.isPresented = false }
+        private func finish(_ phone: CNPhoneNumber?) {
+            parent.isPresented = false
+            guard let raw = phone?.stringValue else { return }
+            parent.onSelect(raw.e164 ?? raw)
         }
     }
 }

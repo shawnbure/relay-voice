@@ -228,7 +228,13 @@ private struct ThreadView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoingAttachment = attachment
         guard (!text.isEmpty || outgoingAttachment != nil), !sending, Date().timeIntervalSince(lastSendAt) >= 0.4 else { return }
-        lastSendAt = .now; sending = true; draft = ""; attachment = nil; photoItem = nil
+        let sentAt = Date.now
+        lastSendAt = sentAt; sending = true; draft = ""; attachment = nil; photoItem = nil
+        // The keyboard can commit pending autocorrect/predictive text after the binding is cleared, putting the
+        // sent text back in the field. Clear any such echo that lands right after send.
+        for delay in [0.05, 0.25] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { if lastSendAt == sentAt && !draft.isEmpty { draft = "" } }
+        }
         let pending = ActivityItem(id: "pending-\(UUID().uuidString)", kind: .message, direction: "outbound", body: text, status: "sending", occurredAt: .now, deliveredAt: nil, media: [], durationSeconds: nil)
         activity.append(pending)
         Task {
@@ -430,6 +436,7 @@ private struct ActivityShare: UIViewControllerRepresentable {
 private struct NewConversationView: View {
     @State private var number = ""
     @State private var showingContacts = false
+    @State private var pickedConversation: Conversation?
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
     @FocusState private var numberFocused: Bool
@@ -465,7 +472,12 @@ private struct NewConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { numberFocused = false } } }
         .task { numberFocused = true }
-        .sheet(isPresented: $showingContacts) { ContactPhonePicker { number = $0 } }
+        .background(ContactPhonePicker(isPresented: $showingContacts) { picked in
+            number = picked
+            numberFocused = false
+            if let peer = picked.e164 { pickedConversation = Conversation(peer: peer, displayName: peer, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message) }
+        })
+        .navigationDestination(item: $pickedConversation) { ThreadView(conversation: $0, startComposing: true) }
     }
 }
 
