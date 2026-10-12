@@ -94,7 +94,7 @@ final class RelaySession: ObservableObject {
         if state == .connected { startEvents() }
     }
     func activity(peer: String) async throws -> [ActivityItem] {
-        guard let normalized = peer.e164 else { throw RelayAPIError.server("This conversation does not contain a valid phone number.") }
+        guard let normalized = peer.conversationPeer else { throw RelayAPIError.server("This conversation does not contain a valid phone number.") }
         let encoded = normalized.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? normalized
         let through = Date()
         let result: DataEnvelope<[ActivityItem]> = try await RelayAPI.shared.request("/v1/activity?peer=\(encoded)")
@@ -124,7 +124,7 @@ final class RelaySession: ObservableObject {
     }
     func deleteMessage(id: String) async throws { let _: EmptyResponse = try await RelayAPI.shared.request("/v1/messages/\(id)", method: "DELETE") }
     func deleteConversation(peer: String) async throws {
-        guard let normalized = peer.e164 else { throw RelayAPIError.server("This conversation does not contain a valid phone number.") }
+        guard let normalized = peer.conversationPeer else { throw RelayAPIError.server("This conversation does not contain a valid phone number.") }
         let encoded = normalized.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? normalized
         let _: EmptyResponse = try await RelayAPI.shared.request("/v1/conversations?peer=\(encoded)", method: "DELETE")
         conversations.removeAll { $0.peer == normalized }

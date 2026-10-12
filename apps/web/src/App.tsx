@@ -26,6 +26,7 @@ function formatDuration(seconds: number) { return `${Math.floor(seconds / 60)}:$
 function phoneDigits(value: string) { return value.replace(/\D/g, ""); }
 function displayPhone(value: string) { const digits = phoneDigits(value); const local = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits; return local.length === 10 ? `(${local.slice(0, 3)}) ${local.slice(3, 6)}-${local.slice(6)}` : local; }
 function phoneInput(value: string) { const digits = phoneDigits(value); return (digits.length > 10 && digits.startsWith("1") ? digits.slice(1) : digits).slice(0, 10); }
+function conversationPeer(value: string) { return phoneE164(value) || (/^\d{3,8}$/.test(value) ? value : ""); }
 function phoneE164(value: string) { const digits = phoneDigits(value); if (digits.length === 10) return `+1${digits}`; if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`; return value.startsWith("+") && /^\+[1-9]\d{7,14}$/.test(value) ? value : ""; }
 function isMobileApp() { return matchMedia("(display-mode: standalone)").matches || ("standalone" in navigator && Boolean((navigator as Navigator & { standalone?: boolean }).standalone)); }
 
@@ -92,7 +93,7 @@ export function App() {
   }, [query, showArchive]);
 
   const refreshMessages = useCallback(async (number = peer) => {
-    const destination = phoneE164(number);
+    const destination = conversationPeer(number);
     if (!destination) { setMessages([]); return; }
     const through = new Date().toISOString();
     const result = await api<{ data: Activity[] }>(`/v1/activity?peer=${encodeURIComponent(destination)}`);
@@ -175,7 +176,7 @@ export function App() {
   }, [callStartedAt]);
 
   const selected = useMemo(() => conversations.find((item) => item.peer === peer), [conversations, peer]);
-  const selectPeer = (number: string) => { setPeer(phoneE164(number)); setSettingsOpen(false); setMobileDialer(false); };
+  const selectPeer = (number: string) => { setPeer(conversationPeer(number)); setSettingsOpen(false); setMobileDialer(false); };
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
     const to = phoneE164(peer); const text = draft.trim(); const now = Date.now();

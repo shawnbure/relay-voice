@@ -10,6 +10,8 @@ export { RelayEvents } from "./events";
 type Variables = { principal: Principal };
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 const E164 = /^\+[1-9]\d{7,14}$/;
+// Conversation peers are E.164 numbers or carrier short codes (e.g. 39569) that text us.
+const PEER = /^(\+[1-9]\d{7,14}|\d{3,8})$/;
 
 app.use("/v1/*", cors({ origin: (origin, c) => origin === new URL(c.req.url).origin ? origin : new URL(c.req.url).origin, credentials: true }));
 app.use("/v1/*", requireSameOrigin);
@@ -203,7 +205,7 @@ app.get('/v1/unread', async c => c.json(await unreadState(c.env,c.get('principal
 app.put('/v1/conversations/read', async c => {
   const {tenantId} = c.get('principal');
   const {peer,through} = await c.req.json<{peer:string;through:string}>();
-  if (!E164.test(peer ?? '') || !Number.isFinite(Date.parse(through))) return c.json({error:'valid peer and read timestamp required'},400);
+  if (!PEER.test(peer ?? '') || !Number.isFinite(Date.parse(through))) return c.json({error:'valid peer and read timestamp required'},400);
   const result = await c.env.DB.prepare('UPDATE notification_items SET read_at=? WHERE tenant_id=? AND peer=? AND read_at IS NULL AND occurred_at<=?').bind(new Date().toISOString(),tenantId,peer,through).run();
   if (result.meta.changes) {
     await enqueueDeliveries(c.env,tenantId,null);
@@ -331,7 +333,7 @@ app.get("/v1/conversations", async (c) => {
 app.put("/v1/conversations/mute", async (c) => {
   const { tenantId } = c.get("principal");
   const body = await c.req.json<{ peer?: string; muted?: boolean }>();
-  if (!body.peer || !E164.test(body.peer) || typeof body.muted !== "boolean") return c.json({ error: "valid peer and mute state required" }, 400);
+  if (!body.peer || !PEER.test(body.peer) || typeof body.muted !== "boolean") return c.json({ error: "valid peer and mute state required" }, 400);
   if (body.muted) {
     await c.env.DB.prepare("INSERT INTO conversation_mutes (tenant_id, peer, muted_at) VALUES (?, ?, ?) ON CONFLICT(tenant_id, peer) DO UPDATE SET muted_at=excluded.muted_at")
       .bind(tenantId, body.peer, new Date().toISOString()).run();
@@ -345,7 +347,7 @@ app.put("/v1/conversations/mute", async (c) => {
 app.put("/v1/conversations/archive", async (c) => {
   const { tenantId } = c.get("principal");
   const body = await c.req.json<{ peer: string; archived: boolean }>();
-  if (!body.peer || !E164.test(body.peer) || typeof body.archived !== "boolean") return c.json({ error: "valid peer and archive state required" }, 400);
+  if (!body.peer || !PEER.test(body.peer) || typeof body.archived !== "boolean") return c.json({ error: "valid peer and archive state required" }, 400);
   if (body.archived) {
     await c.env.DB.prepare("INSERT INTO conversation_archives (tenant_id, peer, archived_at) VALUES (?, ?, ?) ON CONFLICT(tenant_id, peer) DO UPDATE SET archived_at=excluded.archived_at").bind(tenantId, body.peer, new Date().toISOString()).run();
     await c.env.DB.prepare('UPDATE notification_items SET read_at=? WHERE tenant_id=? AND peer=? AND read_at IS NULL').bind(new Date().toISOString(),tenantId,body.peer).run();
@@ -361,7 +363,7 @@ app.put("/v1/conversations/archive", async (c) => {
 app.delete("/v1/conversations", async (c) => {
   const { tenantId } = c.get("principal");
   const peer = c.req.query("peer");
-  if (!peer || !E164.test(peer)) return c.json({ error: "valid peer is required" }, 400);
+  if (!peer || !PEER.test(peer)) return c.json({ error: "valid peer is required" }, 400);
   const [messageRows, voicemailRows] = await Promise.all([
     c.env.DB.prepare("SELECT media_json FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?))").bind(tenantId, peer, peer).all<{ media_json: string }>(),
     c.env.DB.prepare("SELECT object_key FROM voicemails WHERE tenant_id=? AND from_number=? AND object_key IS NOT NULL").bind(tenantId, peer).all<{ object_key: string }>(),
@@ -385,7 +387,7 @@ app.delete("/v1/conversations", async (c) => {
 app.get("/v1/messages", async (c) => {
   const { tenantId } = c.get("principal");
   const peer = c.req.query("peer");
-  if (!peer || !E164.test(peer)) return c.json({ error: "valid peer is required" }, 400);
+  if (!peer || !PEER.test(peer)) return c.json({ error: "valid peer is required" }, 400);
   const result = await c.env.DB.prepare(`SELECT id, direction, from_number, to_number, body, status, occurred_at FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?)) ORDER BY occurred_at ASC LIMIT 500`).bind(tenantId, peer, peer).all();
   return c.json({ data: result.results });
 });
@@ -393,7 +395,7 @@ app.get("/v1/messages", async (c) => {
 app.get("/v1/activity", async (c) => {
   const { tenantId } = c.get("principal");
   const peer = c.req.query("peer");
-  if (!peer || !E164.test(peer)) return c.json({ error: "valid peer is required" }, 400);
+  if (!peer || !PEER.test(peer)) return c.json({ error: "valid peer is required" }, 400);
   const result = await c.env.DB.prepare(`
     SELECT id, 'message' kind, direction, body, status, occurred_at,
       media_json media, delivered_at, NULL answered_at, NULL ended_at, NULL duration_seconds

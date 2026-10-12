@@ -49,5 +49,7 @@ extension JSONDecoder {
 extension String {
     var phoneDigits: String { filter(\.isNumber) }
     var e164: String? { let d = phoneDigits; if d.count == 10 { return "+1" + d }; if d.count == 11 && d.first == "1" { return "+" + d }; return hasPrefix("+") && d.count >= 8 ? "+" + d : nil }
+    /// A conversation peer: an E.164 number, or a carrier short code such as 39569.
+    var conversationPeer: String? { e164 ?? ((3...8).contains(count) && allSatisfy(\.isNumber) ? self : nil) }
     var displayPhone: String { let d = phoneDigits; let n = d.count == 11 && d.first == "1" ? String(d.dropFirst()) : d; guard n.count == 10 else { return self }; return "(\(n.prefix(3))) \(n.dropFirst(3).prefix(3))-\(n.suffix(4))" }
 }
