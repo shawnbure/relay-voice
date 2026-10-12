@@ -84,14 +84,14 @@ private struct ConversationsView: View {
         List {
             ForEach(conversations) { conversation in
             HStack(spacing: 12) {
-                if session.isUnread(conversation) { Circle().fill(Color.blue).frame(width: 8, height: 8).accessibilityLabel("Unread") }
+                Circle().fill(session.isUnread(conversation) ? Color.blue : Color.clear).frame(width: 10, height: 10).accessibilityHidden(!session.isUnread(conversation)).accessibilityLabel("Unread")
                 Button { if conversation.kind == .message { path.append(.message(named(conversation))) } else { voice.start(number: conversation.peer) } } label: {
                     Circle().fill(relayGreen.opacity(0.48)).frame(width: 48, height: 48).overlay(Image(systemName: conversation.kind == .message ? "message.fill" : "phone.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(relayInk))
                 }.buttonStyle(.plain).disabled(conversation.kind != .message && !voice.canStartCall).accessibilityLabel(conversation.kind == .message ? "Message \(conversation.peer.displayPhone)" : "Call \(conversation.peer.displayPhone)")
                 Button { path.append(.history(named(conversation))) } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack { Text(displayName(for: conversation)).font(.headline).foregroundStyle(.primary).lineLimit(1); if conversation.muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Notifications silenced") }; Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
-                        Label(conversation.body.isEmpty ? conversation.kind.summary : conversation.body, systemImage: conversation.kind.icon).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        HStack { Text(displayName(for: conversation)).font(.headline.weight(session.isUnread(conversation) ? .heavy : .semibold)).foregroundStyle(.primary).lineLimit(1); if conversation.muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Notifications silenced") }; Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                        Label(conversation.body.isEmpty ? conversation.kind.summary : conversation.body, systemImage: conversation.kind.icon).font(.subheadline.weight(session.isUnread(conversation) ? .semibold : .regular)).foregroundStyle(session.isUnread(conversation) ? Color.primary : Color.secondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityHint("Opens complete communication history")
             }.padding(.vertical, 5).swipeActions(edge: .leading) {
