@@ -321,9 +321,8 @@ app.get("/v1/conversations", async (c) => {
         AND EXISTS (SELECT 1 FROM activity matched WHERE matched.peer=r.peer AND
           (?='' OR instr(lower(matched.body), lower(?))>0 OR instr(r.peer, ?)>0 OR instr(lower(COALESCE(c.display_name,'')), lower(?))>0))
         AND (EXISTS (SELECT 1 FROM conversation_archives a WHERE a.tenant_id=? AND a.peer=r.peer AND a.archived_at >= r.occurred_at)) = ?
-        AND r.peer GLOB '+[1-9]*'
-        AND r.peer NOT GLOB '*[^0-9+]*'
-        AND length(r.peer) BETWEEN 9 AND 16
+        AND ((r.peer GLOB '+[1-9]*' AND r.peer NOT GLOB '+*[^0-9]*' AND length(r.peer) BETWEEN 9 AND 16)
+          OR (r.peer NOT GLOB '*[^0-9]*' AND length(r.peer) BETWEEN 3 AND 8))
         AND NOT EXISTS (SELECT 1 FROM phone_numbers owned WHERE owned.tenant_id=? AND owned.e164=r.peer)
       ORDER BY r.occurred_at DESC LIMIT 100
   `).bind(tenantId, tenantId, tenantId, tenantId, tenantId, query, query, query, query, tenantId, archived, tenantId).all<Record<string, unknown> & { muted: number }>();
