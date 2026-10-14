@@ -444,7 +444,7 @@ app.post("/v1/messages", async (c) => {
   const p = c.get("principal");
   const body = await c.req.json<{ to?: string; text?: string; attachment?: { name?: string; contentType?: string; base64?: string } }>();
   const to = body.to?.trim(); const text = body.text?.trim() ?? "";
-  if (!to || !E164.test(to) || (!text && !body.attachment) || text.length > 1600) return c.json({ error: "valid E.164 destination and message content are required" }, 400);
+  if (!to || !PEER.test(to) || (!text && !body.attachment) || text.length > 1600) return c.json({ error: "valid destination number and message content are required" }, 400);
   const phone = await c.env.DB.prepare("SELECT e164 FROM phone_numbers WHERE tenant_id=? ORDER BY created_at LIMIT 1").bind(p.tenantId).first<{ e164: string }>();
   if (!phone) return c.json({ error: "workspace has no provisioned phone number" }, 409);
   const media: StoredMedia[] = [];
