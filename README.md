@@ -2,6 +2,8 @@
 
 Relay is a self-hosted communications inbox and softphone built with Telnyx, Cloudflare Workers, React, and SwiftUI. It keeps SMS, MMS, calls, and voicemail in one timeline per phone number and provides both a responsive web client and a native iPhone client.
 
+Built on Cloudflare Workers, Durable Objects, D1, and R2 by [workrr.ai](https://workrr.ai).
+
 > [!IMPORTANT]
 > Relay is an early-stage project, not a turnkey telephone service. Operators are responsible for their Telnyx account, messaging registration, emergency-calling obligations, abuse prevention, data retention, and regulatory compliance. Do not rely on Relay for emergency calls.
 
@@ -36,7 +38,7 @@ docs        Architecture and design notes
 ## Local development
 
 ```sh
-git clone https://github.com/OWNER/relay-voice.git
+git clone https://github.com/shawnbure/relay-voice.git
 cd relay-voice
 npm install
 cp apps/api/.dev.vars.example apps/api/.dev.vars
