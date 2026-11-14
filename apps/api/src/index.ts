@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { enqueueNotification, enqueueDeliveries, drainPushes, unreadState } from './notifications';
+import { enqueueNotification, enqueueDeliveries, drainPushes, unreadState, sendIncomingCallAlert } from './notifications';
 import { cors } from "hono/cors";
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from "@simplewebauthn/server";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
@@ -714,6 +714,8 @@ async function applyAndRouteCallEvent(env: Env, eventType: string, occurredAt: s
     const clientCallControlId = await dialRelayClient(env.TELNYX_API_KEY, { applicationId: phone.connection_id, sipUsername, callerNumber: from, inboundCallControlId: callControlId });
     await env.DB.prepare("INSERT OR IGNORE INTO inbound_call_routes (id, tenant_id, inbound_call_control_id, client_call_control_id, caller_number, relay_number, status) VALUES (?, ?, ?, ?, ?, ?, 'ringing')")
       .bind(crypto.randomUUID(), tenantId, callControlId, clientCallControlId, from, to).run();
+    // Fallback ring alert: shows even when the app is closed and VoIP push does not wake it.
+    await sendIncomingCallAlert(env, tenantId, from, callControlId).catch(error => console.error(JSON.stringify({ event: 'incoming_call_alert_failed', error: String(error) })));
   } else if (eventType === "call.hangup") {
     if (tenantId) {
       const call = await env.DB.prepare('SELECT answered_at,from_number,direction FROM calls WHERE tenant_id=? AND telnyx_call_control_id=?').bind(tenantId,callControlId).first<{answered_at:string|null;from_number:string;direction:string}>();

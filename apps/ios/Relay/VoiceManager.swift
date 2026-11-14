@@ -3,6 +3,7 @@ import CallKit
 import Foundation
 import PushKit
 import UIKit
+import UserNotifications
 @preconcurrency import TelnyxRTC
 
 @MainActor
@@ -112,7 +113,15 @@ final class VoiceManager: NSObject, ObservableObject {
         #endif
     }
     private func request(_ transaction: CXTransaction) { callController.request(transaction) { [weak self] error in if let error { Task { @MainActor in self?.currentCallID = self?.call?.callInfo?.callId; self?.hasCall = self?.call != nil; self?.status = .failed(error.localizedDescription) } } } }
-    private func finish() { call = nil; currentCallID = nil; hasCall = false; incoming = false; reportedIncomingCalls.removeAll(); remoteNumber = ""; startedAt = nil; muted = false; speaker = false; status = .ready }
+    /// Removes fallback "Incoming call" alerts once the call is answered or over.
+    private func clearIncomingCallAlerts() {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { notifications in
+            let ids = notifications.filter { $0.request.content.userInfo["kind"] as? String == "incoming_call" }.map(\.request.identifier)
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
+    }
+    private func finish() { clearIncomingCallAlerts(); call = nil; currentCallID = nil; hasCall = false; incoming = false; reportedIncomingCalls.removeAll(); remoteNumber = ""; startedAt = nil; muted = false; speaker = false; status = .ready }
     private func reportIncomingCall(id: UUID, number: String) {
         guard reportedIncomingCalls.insert(id).inserted else { return }
         let update = CXCallUpdate(); update.remoteHandle = CXHandle(type: .phoneNumber, value: number); update.localizedCallerName = number.e164?.displayPhone ?? number; update.hasVideo = false; update.supportsDTMF = true; update.supportsHolding = true; update.supportsGrouping = false; update.supportsUngrouping = false
@@ -201,7 +210,7 @@ extension VoiceManager: CXProviderDelegate {
             catch { self.hasCall = false; self.status = .failed(error.localizedDescription); action.fail() }
         }
     }
-    nonisolated func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) { Task { @MainActor in self.call?.answer(); action.fulfill() } }
+    nonisolated func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) { Task { @MainActor in self.call?.answer(); self.clearIncomingCallAlerts(); action.fulfill() } }
     nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) { Task { @MainActor in self.call?.hangup(); self.finish(); action.fulfill() } }
     nonisolated func provider(_ provider: CXProvider, perform action: CXPlayDTMFCallAction) { Task { @MainActor in self.sendDTMF(action.digits); action.fulfill() } }
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) { Task { @MainActor in if action.isOnHold { self.call?.hold() } else { self.call?.unhold() }; action.fulfill() } }

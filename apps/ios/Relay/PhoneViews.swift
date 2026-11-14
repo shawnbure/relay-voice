@@ -1,3 +1,4 @@
+import AudioToolbox
 import AVFoundation
 import ContactsUI
 import SwiftUI
@@ -17,36 +18,27 @@ struct DialerView: View {
             let keySize = min(max((geometry.size.width - 112) / 3, 64), 78)
             VStack(spacing: 0) {
                 Spacer(minLength: 12)
-                ZStack(alignment: .trailing) {
-                    VStack(spacing: 5) {
+                VStack(spacing: 5) {
+                    HStack(spacing: 4) {
+                        Button { showingContacts = true } label: { Image(systemName: "person.crop.circle").font(.title2).frame(width: 44, height: 48) }
+                            .accessibilityLabel("Choose contact").opacity(voice.isInCall ? 0 : 1).disabled(voice.isInCall)
                         if voice.isInCall {
-                            Text(voice.remoteNumber.displayPhone).font(.system(size: 30, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.65)
+                            Text(voice.remoteNumber.displayPhone).font(.system(size: 30, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.65).frame(maxWidth: .infinity)
                         } else {
-                            PhoneNumberField(number: $number)
-                                .frame(height: 48)
-                                .accessibilityLabel("Phone number")
+                            PhoneNumberField(number: $number).frame(height: 48).frame(maxWidth: .infinity).accessibilityLabel("Phone number")
                         }
-                        Text(voice.status.label).font(.callout).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity)
-                    if !voice.isInCall {
-                        HStack(spacing: 2) {
-                            Button { showingContacts = true } label: { Image(systemName: "person.crop.circle").font(.title2).frame(width: 44, height: 48) }.accessibilityLabel("Choose contact")
-                            if !number.isEmpty { Button { number = String(number.dropLast()) } label: { Image(systemName: "delete.left").font(.title2).frame(width: 44, height: 48) }.accessibilityLabel("Delete digit") }
-                        }
+                        Image(systemName: "delete.left").font(.title2).frame(width: 44, height: 48).contentShape(Rectangle())
+                            .onTapGesture { deleteDigit() }
+                            .onLongPressGesture(minimumDuration: 0.45) { number = ""; UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+                            .opacity(number.isEmpty || voice.isInCall ? 0 : 1).allowsHitTesting(!number.isEmpty && !voice.isInCall)
+                            .accessibilityAddTraits(.isButton).accessibilityLabel("Delete digit").accessibilityHint("Touch and hold to clear the number")
                     }
+                    Text(voice.status.label).font(.callout).foregroundStyle(.secondary)
                 }.frame(height: 78).padding(.horizontal, 20)
                 Spacer(minLength: 12)
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(keySize), spacing: 24), count: 3), spacing: 14) {
                     ForEach(keys, id: \.self) { key in
-                        Button {
-                            if voice.isInCall { voice.sendDTMF(key.digit) }
-                            else if number.phoneDigits.count < 10 || ["*", "#"].contains(key.digit) { number += key.digit }
-                        } label: {
-                            VStack(spacing: -1) {
-                                Text(key.digit).font(.system(size: 30, weight: .regular, design: .rounded))
-                                Text(key.letters).font(.system(size: 9, weight: .semibold)).tracking(1.2).frame(height: 10)
-                            }.frame(width: keySize, height: keySize).background(Color(.secondarySystemBackground)).clipShape(Circle())
-                        }.buttonStyle(.plain)
+                        DialPadKey(key: key, size: keySize, onTap: { press(key.digit) }, onLongPress: key.digit == "0" ? { press("+") } : nil)
                     }
                 }.frame(maxWidth: .infinity)
                 Spacer(minLength: 18)
@@ -64,6 +56,13 @@ struct DialerView: View {
         }.navigationTitle("Keypad").navigationBarTitleDisplayMode(.inline)
             .background(ContactPhonePicker(isPresented: $showingContacts) { number = $0 })
     }
+    private func press(_ digit: String) {
+        if voice.isInCall { voice.sendDTMF(digit); return }
+        if digit == "+" { if number.isEmpty { number = "+" } else { press("0") }; return }
+        guard number.phoneDigits.count < maxDialDigits(number) || !digit.allSatisfy(\.isNumber) else { return }
+        number += digit
+    }
+    private func deleteDigit() { if !number.isEmpty { number.removeLast() } }
 }
 
 /// Presents the system contact picker from UIKit. Wrapping CNContactPickerViewController directly in a SwiftUI
@@ -120,15 +119,15 @@ private struct PhoneNumberField: UIViewRepresentable {
         field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
         return field
     }
-    func updateUIView(_ field: UITextField, context: Context) { if field.text != number { field.text = number } }
+    func updateUIView(_ field: UITextField, context: Context) { let shown = formatDialInput(number); if field.text != shown { field.text = shown } }
     final class Coordinator: NSObject, UITextFieldDelegate {
         @Binding var number: String
         init(number: Binding<String>) { _number = number }
-        @objc func changed(_ field: UITextField) { number = field.text ?? "" }
+        @objc func changed(_ field: UITextField) { number = (field.text ?? "").filter { $0.isNumber || "+*#".contains($0) } }
         func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
             guard let current = textField.text, let swiftRange = Range(range, in: current) else { return false }
             let candidate = current.replacingCharacters(in: swiftRange, with: string)
-            return candidate.phoneDigits.count <= 11
+            return candidate.phoneDigits.count <= maxDialDigits(candidate)
         }
     }
 }
@@ -150,6 +149,56 @@ private struct AudioRouteControl: View {
                 Text(selected.name).font(.caption.weight(voice.selectedAudioRouteID == "receiver" ? .regular : .bold)).lineLimit(1).frame(maxWidth: 72)
             }
         }.accessibilityLabel("Audio output").accessibilityValue(selected.name)
+    }
+}
+
+/// US numbers allow 10 digits, or 11 with a leading 1; international (+) numbers allow up to 15.
+private func maxDialDigits(_ input: String) -> Int { input.hasPrefix("+") && !input.hasPrefix("+1") ? 15 : input.phoneDigits.first == "1" ? 11 : 10 }
+/// Formats US numbers as they are typed: 480, 480-7885, (480) 788-5010, 1 (480) 788-5010.
+func formatDialInput(_ input: String) -> String {
+    guard !input.contains(where: { "*#".contains($0) }), !(input.hasPrefix("+") && !input.hasPrefix("+1")) else { return input }
+    var digits = input.phoneDigits; var prefix = input.hasPrefix("+") ? "+" : ""
+    if digits.first == "1" { prefix += digits.count > 1 ? "1 " : "1"; digits.removeFirst() }
+    guard digits.count <= 10 else { return input }
+    let d = Array(digits)
+    switch d.count {
+    case 0...3: return prefix + digits
+    case 4...7: return prefix + String(d[0..<3]) + "-" + String(d[3...])
+    default: return prefix + "(" + String(d[0..<3]) + ") " + String(d[3..<6]) + "-" + String(d[6...])
+    }
+}
+private struct DialPadKey: View {
+    let key: DialKey; let size: CGFloat; let onTap: () -> Void; let onLongPress: (() -> Void)?
+    @State private var longPressed = false
+    var body: some View {
+        Button {
+            if longPressed { longPressed = false; return }
+            feedback(); onTap()
+        } label: {
+            VStack(spacing: -1) {
+                Text(key.digit).font(.system(size: 32, weight: .regular, design: .rounded))
+                Text(key.letters).font(.system(size: 9, weight: .semibold)).tracking(1.2).frame(height: 10)
+            }.frame(width: size, height: size)
+        }
+        .buttonStyle(DialPadKeyStyle())
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+            guard let onLongPress else { return }
+            longPressed = true; feedback(); onLongPress()
+        })
+        .accessibilityLabel(key.digit)
+    }
+    private func feedback() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // System DTMF tones: 1200–1209 are 0–9, 1210 is *, 1211 is #.
+        let tone: SystemSoundID = key.digit == "*" ? 1210 : key.digit == "#" ? 1211 : 1200 + SystemSoundID(Int(key.digit) ?? 0)
+        AudioServicesPlaySystemSound(tone)
+    }
+}
+private struct DialPadKeyStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color(.systemGray3) : Color(.secondarySystemBackground)).clipShape(Circle())
+            .animation(.easeOut(duration: configuration.isPressed ? 0.04 : 0.25), value: configuration.isPressed)
     }
 }
 

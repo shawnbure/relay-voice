@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
-import { apnsJWT, pushPayload } from '../src/notifications';
+import { apnsJWT, callCollapseId, incomingCallPayload, pushPayload } from '../src/notifications';
 
 test('APNs JWT uses ES256 with a valid raw signature and no private key in its claims', async () => {
   const pair = await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
@@ -20,6 +20,14 @@ test('push payloads provide alerts for new items and badge-only updates after re
     expect(p.aps.badge).toBe(3); expect(p.aps).toHaveProperty('sound','default'); expect(p).toHaveProperty('peer','+15551234567');
   }
   expect(pushPayload(null,0)).toEqual({aps:{badge:0}});
+});
+test('incoming call alerts are time-sensitive and share a short collapse id with the missed call', async () => {
+  const p = incomingCallPayload('+15551234567','Pat',2);
+  expect(p.aps).toMatchObject({badge:2,sound:'default','interruption-level':'time-sensitive',alert:{title:'Incoming call',body:'Pat'}});
+  expect(p.kind).toBe('incoming_call');
+  expect(pushPayload({peer:'+15551234567',kind:'missed_call',body:'x'},1).aps).toHaveProperty('interruption-level','time-sensitive');
+  const id = await callCollapseId('v3:'+'x'.repeat(120));
+  expect(id).toBe(await callCollapseId('v3:'+'x'.repeat(120))); expect(id.length).toBeLessThanOrEqual(64);
 });
 test('notification state is tenant scoped, deduplicated, and read only through displayed time', () => {
   const db = new DatabaseSync(':memory:');

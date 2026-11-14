@@ -24,10 +24,42 @@ export async function apnsJWT(env: Pick<Env, 'APNS_PRIVATE_KEY' | 'APNS_TEAM_ID'
 }
 export function pushPayload(item: { peer: string; kind: string; body: string } | null, badge: number, muted = false) {
   const title = item?.kind === 'voicemail' ? 'New voicemail' : item?.kind === 'missed_call' ? 'Missed call' : 'New message';
-  return { aps: { badge, ...(item && !muted ? { alert: { title, body: `${item.peer}: ${item.body}` }, sound: 'default', 'thread-id': item.peer } : item && muted ? { 'content-available': 1 } : {}) }, ...(item ? { peer: item.peer, kind: item.kind } : {}) };
+  const urgency = item?.kind === 'missed_call' ? { 'interruption-level': 'time-sensitive' } : {};
+  return { aps: { badge, ...(item && !muted ? { alert: { title, body: `${item.peer}: ${item.body}` }, sound: 'default', 'thread-id': item.peer, ...urgency } : item && muted ? { 'content-available': 1 } : {}) }, ...(item ? { peer: item.peer, kind: item.kind } : {}) };
+}
+export function incomingCallPayload(peer: string, caller: string, badge: number) {
+  return { aps: { badge, alert: { title: 'Incoming call', body: caller }, sound: 'default', 'thread-id': peer, 'interruption-level': 'time-sensitive' }, peer, kind: 'incoming_call' };
+}
+/** The ringing alert and the missed-call alert for one call share a collapse id, so a missed call replaces the ring. */
+export async function callCollapseId(callControlId: string) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(callControlId)));
+  return `call-${Array.from(digest.slice(0, 16), b => b.toString(16).padStart(2, '0')).join('')}`;
+}
+function apnsConfigured(env: Env) {
+  if (env.APNS_PRIVATE_KEY && env.APNS_BUNDLE_ID && env.APNS_TEAM_ID && env.APNS_KEY_ID) return true;
+  console.error(JSON.stringify({ event: 'apns_not_configured', missing: ['APNS_PRIVATE_KEY','APNS_BUNDLE_ID','APNS_TEAM_ID','APNS_KEY_ID'].filter(k => !env[k as keyof Env]) }));
+  return false;
+}
+/** Sends the live "Incoming call" alert straight to devices; it is not an unread item and is never retried. */
+export async function sendIncomingCallAlert(env: Env, tenantId: string, peer: string, callControlId: string) {
+  if (!apnsConfigured(env)) return;
+  const devices = await env.DB.prepare('SELECT DISTINCT token,environment FROM push_devices WHERE tenant_id=?').bind(tenantId).all<PushDevice>();
+  if (!devices.results.length) return;
+  const contact = await env.DB.prepare('SELECT display_name FROM contacts WHERE tenant_id=? AND phone_number=?').bind(tenantId, peer).first<{ display_name: string }>();
+  const payload = JSON.stringify(incomingCallPayload(peer, contact?.display_name ?? peer, (await unreadState(env, tenantId)).count));
+  const [jwt, collapseId] = await Promise.all([apnsJWT(env), callCollapseId(callControlId)]);
+  await Promise.all(devices.results.map(async d => {
+    const host = d.environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
+    try {
+      const response = await fetch(`https://${host}/3/device/${d.token}`, { method: 'POST', headers: { authorization: `bearer ${jwt}`, 'apns-topic': env.APNS_BUNDLE_ID!, 'apns-push-type': 'alert', 'apns-priority': '10', 'apns-collapse-id': collapseId, 'apns-expiration': String(Math.floor(Date.now()/1000) + 60), 'content-type': 'application/json' }, body: payload, signal: AbortSignal.timeout(5000) });
+      console.log(JSON.stringify({ event: 'apns_incoming_call', status: response.status, reason: response.ok ? null : (await response.json<{reason?:string}>()).reason }));
+    } catch (error) { console.error(JSON.stringify({ event: 'apns_incoming_call_error', error: String(error) })); }
+  }));
 }
 export async function drainPushes(env: Env) {
-  if (!env.APNS_PRIVATE_KEY || !env.APNS_BUNDLE_ID) return;
+  if (!apnsConfigured(env)) return;
+  // Never deliver a backlog: anything queued over a day ago (e.g. while APNs was misconfigured) is dropped.
+  await env.DB.prepare("UPDATE push_deliveries SET status='expired' WHERE status='pending' AND created_at<?").bind(Date.now()-86400000).run();
   const rows = await env.DB.prepare("SELECT * FROM push_deliveries WHERE status='pending' AND next_attempt<=? ORDER BY created_at LIMIT 30").bind(Date.now()).all<Delivery>();
   if (!rows.results.length) return;
   const jwt = await apnsJWT(env);
@@ -40,7 +72,8 @@ export async function drainPushes(env: Env) {
       const badge = (await unreadState(env, d.tenant_id)).count;
       const muted = item ? Boolean(await env.DB.prepare('SELECT 1 muted FROM conversation_mutes WHERE tenant_id=? AND peer=?').bind(d.tenant_id, item.peer).first()) : false;
       const host = d.environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
-      const response = await fetch(`https://${host}/3/device/${d.token}`, { method: 'POST', headers: { authorization: `bearer ${jwt}`, 'apns-topic': env.APNS_BUNDLE_ID, 'apns-push-type': 'alert', 'apns-priority': '10', 'apns-id': d.id, 'apns-expiration': String(Math.floor((d.created_at+86400000)/1000)), 'content-type': 'application/json' }, body: JSON.stringify(pushPayload(item?.read_at == null ? item : null, badge, muted)), signal: AbortSignal.timeout(10000) });
+      const collapse: Record<string, string> = d.item_id?.startsWith('missed:') ? { 'apns-collapse-id': await callCollapseId(d.item_id.slice('missed:'.length)) } : {};
+      const response = await fetch(`https://${host}/3/device/${d.token}`, { method: 'POST', headers: { ...collapse, authorization: `bearer ${jwt}`, 'apns-topic': env.APNS_BUNDLE_ID!, 'apns-push-type': 'alert', 'apns-priority': '10', 'apns-id': d.id, 'apns-expiration': String(Math.floor((d.created_at+86400000)/1000)), 'content-type': 'application/json' }, body: JSON.stringify(pushPayload(item?.read_at == null ? item : null, badge, muted)), signal: AbortSignal.timeout(10000) });
       const reason = response.ok ? null : (await response.json<{reason?:string}>()).reason ?? String(response.status);
       if (response.status === 410 || reason === 'BadDeviceToken' || reason === 'DeviceTokenNotForTopic') await env.DB.prepare('DELETE FROM push_devices WHERE tenant_id=? AND token=? AND environment=?').bind(d.tenant_id, d.token, d.environment).run();
       const terminal = response.ok || (response.status >= 400 && response.status < 500 && ![403,429].includes(response.status)) || d.attempts >= 9 || Date.now()-d.created_at > 86400000;

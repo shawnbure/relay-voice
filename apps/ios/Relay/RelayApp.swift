@@ -17,6 +17,8 @@ final class RelayNotifications: NSObject, UIApplicationDelegate, UNUserNotificat
         print("APNs registration failed: \(error.localizedDescription)")
     }
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // The in-app call screen already rings for a live call; skip the fallback alert's banner then.
+        if notification.request.content.userInfo["kind"] as? String == "incoming_call", Self.session?.voice.isInCall == true { completionHandler([]); return }
         let peer = notification.request.content.userInfo["peer"] as? String
         let viewing = peer != nil && Self.session?.isViewing(peer!) == true
         let muted = peer != nil && Self.session?.isMuted(peer!) == true
