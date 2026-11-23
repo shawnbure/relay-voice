@@ -113,6 +113,17 @@ final class RelaySession: ObservableObject {
         await registerPushDevice()
         if state == .connected { startEvents() }
     }
+    /// Signs in with a passkey saved for the Relay website (iCloud Keychain / Passwords).
+    func signInWithPasskey() async throws {
+        let pending: PasskeyOptionsResponse = try await RelayAPI.shared.request("/v1/auth/login/options", method: "POST", body: EmptyBody())
+        let credential = try await PasskeyAssertion().run(relyingParty: pending.options.rpId, challenge: pending.options.challenge)
+        let response: SignInResponse = try await RelayAPI.shared.request("/v1/auth/mobile/passkey", method: "POST", body: PasskeySignInRequest(challengeId: pending.challengeId, credential: credential, deviceName: UIDevice.current.name))
+        RelayAPI.shared.setToken(response.token)
+        state = .loading
+        await refresh()
+        await registerPushDevice()
+        if state == .connected { startEvents() }
+    }
     func signOut() async {
         let installation = Keychain.read("relay.apns.installation")
         let _: EmptyResponse? = try? await RelayAPI.shared.request("/v1/auth/mobile/logout", method: "POST", body: SignOutRequest(installationId: installation))
@@ -212,6 +223,9 @@ private struct MessageAttachmentRequest: Encodable { let name: String; let conte
 private struct MessageRequest: Encodable { let to: String; let from: String?; let text: String; let attachment: MessageAttachmentRequest? }
 private struct SignInRequest: Encodable { let email: String; let password: String; let deviceName: String }
 private struct SignInResponse: Decodable { let token: String }
+private struct EmptyBody: Encodable {}
+private struct PasskeyOptionsResponse: Decodable { struct Options: Decodable { let challenge: String; let rpId: String }; let challengeId: String; let options: Options }
+private struct PasskeySignInRequest: Encodable { let challengeId: String; let credential: PasskeyAssertion.Credential; let deviceName: String }
 private struct PasswordRequest: Encodable { let password: String }
 private struct SignOutRequest: Encodable { let installationId: String? }
 private struct AddLineRequest: Encodable { let e164: String; let label: String }

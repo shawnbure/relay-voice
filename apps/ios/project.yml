@@ -19,6 +19,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.relay
         RELAY_API_BASE_URL: https://relay.example.com
+        # Host whose passkeys the app can use (serves /.well-known/apple-app-site-association).
+        RELAY_PASSKEY_DOMAIN: relay.example.com
         PRODUCT_NAME: Relay
         SWIFT_VERSION: 5.0
         # iPhone and iPad; the iPad build also runs as the Mac app (Mac Catalyst).

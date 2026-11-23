@@ -3,4 +3,5 @@
 <plist version="1.0"><dict>
   <key>aps-environment</key><string>development</string>
   <key>com.apple.developer.usernotifications.time-sensitive</key><true/>
+  <key>com.apple.developer.associated-domains</key><array><string>webcredentials:$(RELAY_PASSKEY_DOMAIN)</string></array>
 </dict></plist>

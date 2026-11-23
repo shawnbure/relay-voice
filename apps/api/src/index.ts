@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { enqueueNotification, enqueueDeliveries, drainPushes, unreadState, sendIncomingCallAlert, lineDisplayName } from './notifications';
 import { cors } from "hono/cors";
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from "@simplewebauthn/server";
@@ -98,16 +98,20 @@ app.post("/v1/auth/mobile/login", async (c) => {
   await c.env.DB.prepare("INSERT INTO password_attempts(id,hostname,client_hash,succeeded) VALUES(?,?,?,?)").bind(crypto.randomUUID(), hostname, clientHash, valid ? 1 : 0).run();
   if (!valid || !user) return c.json({ error: "incorrect email or password" }, 401);
   await c.env.DB.prepare("DELETE FROM password_attempts WHERE hostname=? AND client_hash=?").bind(hostname, clientHash).run();
+  return c.json(await issueMobileToken(c.env, user.tenant_id, user.id, body.deviceName, "mobile.signed_in"), 201);
+});
+
+async function issueMobileToken(env: Env, tenantId: string, userId: string, deviceName: string | undefined, action: string) {
   const token = newMobileToken();
   const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
-  await c.env.DB.batch([
-    c.env.DB.prepare("INSERT INTO mobile_api_tokens (id, tenant_id, user_id, token_hash, device_name, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(crypto.randomUUID(), user.tenant_id, user.id, await sha256(token), body.deviceName?.trim().slice(0, 80) || "Relay app", expiresAt),
-    c.env.DB.prepare("INSERT INTO audit_log(id,tenant_id,user_id,action,metadata) VALUES(?,?,?,'mobile.signed_in',?)")
-      .bind(crypto.randomUUID(), user.tenant_id, user.id, JSON.stringify({ device: body.deviceName?.slice(0, 80) ?? null })),
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO mobile_api_tokens (id, tenant_id, user_id, token_hash, device_name, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), tenantId, userId, await sha256(token), deviceName?.trim().slice(0, 80) || "Relay app", expiresAt),
+    env.DB.prepare("INSERT INTO audit_log(id,tenant_id,user_id,action,metadata) VALUES(?,?,?,?,?)")
+      .bind(crypto.randomUUID(), tenantId, userId, action, JSON.stringify({ device: deviceName?.slice(0, 80) ?? null })),
   ]);
-  return c.json({ token, expiresAt }, 201);
-});
+  return { token, expiresAt };
+}
 
 app.post("/v1/auth/register/options", async (c) => {
   const existing = await c.env.DB.prepare("SELECT COUNT(*) count FROM passkeys").first<{ count: number }>();
@@ -169,22 +173,43 @@ app.post("/v1/auth/login/options", async (c) => {
   return c.json({ challengeId, options });
 });
 
-app.post("/v1/auth/login/verify", async (c) => {
-  const body = await c.req.json<{ challengeId?: string; credential?: AuthenticationResponseJSON }>();
+/** Verifies a passkey assertion for this hostname's workspace. Returns the signed-in user, or an error response. */
+async function verifyPasskeyLogin(c: Context<{ Bindings: Env; Variables: Variables }>): Promise<{ userId: string; tenantId: string; deviceName?: string } | Response> {
+  const body = await c.req.json<{ challengeId?: string; credential?: AuthenticationResponseJSON; deviceName?: string }>();
   const pending = await challenge(c.env.DB, body.challengeId, "authentication");
   if (!pending || !body.credential) return c.json({ error: "sign-in request expired; try again" }, 400);
   const hostname = new URL(c.req.url).hostname.toLowerCase();
-  const saved = await c.env.DB.prepare("SELECT p.id, p.user_id, p.public_key, p.counter, p.transports FROM passkeys p JOIN memberships m ON m.user_id=p.user_id JOIN tenant_domains d ON d.tenant_id=m.tenant_id WHERE p.id=? AND d.hostname=?").bind(body.credential.id,hostname).first<{ id: string; user_id: string; public_key: ArrayBuffer; counter: number; transports: string | null }>();
+  const saved = await c.env.DB.prepare("SELECT p.id, p.user_id, m.tenant_id, p.public_key, p.counter, p.transports FROM passkeys p JOIN memberships m ON m.user_id=p.user_id JOIN tenant_domains d ON d.tenant_id=m.tenant_id WHERE p.id=? AND d.hostname=?").bind(body.credential.id,hostname).first<{ id: string; user_id: string; tenant_id: string; public_key: ArrayBuffer; counter: number; transports: string | null }>();
   if (!saved) return c.json({ error: "passkey is not registered with Relay" }, 401);
   const rp = relyingParty(c.env.WEB_ORIGIN);
+  // Native apps (iPhone, Mac) report the relying party's https origin, the same as the web app.
   const verification = await verifyAuthenticationResponse({ response: body.credential, expectedChallenge: pending.challenge, expectedOrigin: rp.origin, expectedRPID: rp.id, requireUserVerification: true, credential: { id: saved.id, publicKey: new Uint8Array(saved.public_key), counter: saved.counter, transports: saved.transports ? JSON.parse(saved.transports) : undefined } });
   if (!verification.verified) return c.json({ error: "passkey could not be verified" }, 401);
   await c.env.DB.batch([
     c.env.DB.prepare("UPDATE passkeys SET counter = ? WHERE id = ?").bind(verification.authenticationInfo.newCounter, saved.id),
     c.env.DB.prepare("DELETE FROM passkey_challenges WHERE id = ?").bind(body.challengeId),
   ]);
-  await createSession(c, saved.user_id);
+  return { userId: saved.user_id, tenantId: saved.tenant_id, deviceName: body.deviceName };
+}
+
+app.post("/v1/auth/login/verify", async (c) => {
+  const result = await verifyPasskeyLogin(c);
+  if (result instanceof Response) return result;
+  await createSession(c, result.userId);
   return c.json({ authenticated: true });
+});
+
+// Passkey sign-in for the native apps: same check as the web, but returns a device token.
+app.post("/v1/auth/mobile/passkey", async (c) => {
+  const result = await verifyPasskeyLogin(c);
+  if (result instanceof Response) return result;
+  return c.json(await issueMobileToken(c.env, result.tenantId, result.userId, result.deviceName, "mobile.signed_in.passkey"), 201);
+});
+
+// Lets iPhone and Mac use this site's passkeys (Associated Domains "webcredentials").
+app.get("/.well-known/apple-app-site-association", (c) => {
+  if (!c.env.APNS_TEAM_ID || !c.env.APNS_BUNDLE_ID) return c.notFound();
+  return c.json({ webcredentials: { apps: [`${c.env.APNS_TEAM_ID}.${c.env.APNS_BUNDLE_ID}`] } });
 });
 
 app.post("/v1/auth/logout", async (c) => { await clearSession(c); return c.json({ authenticated: false }); });

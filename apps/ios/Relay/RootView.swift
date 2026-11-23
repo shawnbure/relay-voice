@@ -57,19 +57,30 @@ private struct SignInView: View {
                 VStack(spacing: 12) {
                     TextField("Email", text: $email).textContentType(.username).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .focused($focus, equals: .email).submitLabel(.next).onSubmit { focus = .password }
+                        // Tab moves between the fields with a hardware keyboard (Mac, iPad).
+                        .onKeyPress(.tab) { focus = .password; return .handled }
                         .padding(14).background(Color(.secondarySystemGroupedBackground)).clipShape(RoundedRectangle(cornerRadius: 12))
                     SecureField("Password", text: $password).textContentType(.password)
                         .focused($focus, equals: .password).submitLabel(.go).onSubmit { Task { await signIn() } }
+                        .onKeyPress(.tab) { focus = .email; return .handled }
                         .padding(14).background(Color(.secondarySystemGroupedBackground)).clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 if let message { Label(message, systemImage: "exclamationmark.triangle.fill").font(.footnote).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading) }
                 Button { Task { await signIn() } } label: {
                     Group { if signingIn { ProgressView().tint(.white) } else { Text("Sign In").fontWeight(.semibold) } }.frame(maxWidth: .infinity).frame(height: 30)
                 }.buttonStyle(.borderedProminent).tint(relayInk).controlSize(.large).disabled(!canSubmit)
+                HStack { Rectangle().frame(height: 0.5); Text("or").font(.footnote).foregroundStyle(.secondary); Rectangle().frame(height: 0.5) }.foregroundStyle(Color(.separator))
+                Button { Task { await signInWithPasskey() } } label: { Label("Sign In With Passkey", systemImage: "person.badge.key.fill").fontWeight(.semibold).frame(maxWidth: .infinity).frame(height: 30) }
+                    .buttonStyle(.bordered).controlSize(.large).disabled(signingIn)
             }.padding(28).frame(maxWidth: 440)
         }
         .frame(maxWidth: .infinity).background(Color(.systemGroupedBackground))
         .task { focus = email.isEmpty ? .email : .password }
+    }
+    private func signInWithPasskey() async {
+        signingIn = true; message = nil
+        defer { signingIn = false }
+        do { try await session.signInWithPasskey(); lock.markUnlocked() } catch { message = error.localizedDescription }
     }
     private func signIn() async {
         guard canSubmit else { return }

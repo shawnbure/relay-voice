@@ -16,6 +16,7 @@
 		83A8BA29AC759A450A261572 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 359767A5465051721E7F2076 /* Assets.xcassets */; };
 		8C972E1D9F33398EAE9E84C0 /* RelayAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ECD94C0F0A719EE2FF7960C /* RelayAPI.swift */; };
 		B0D92E6994C577E47D478DEC /* VoiceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A203471CB5071FE40FD885 /* VoiceManager.swift */; };
+		C727B7F64710A04FE6FAE8D6 /* PasskeyAssertion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 758BCC6AC6809974D5CCAA69 /* PasskeyAssertion.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,6 +24,7 @@
 		3ECD94C0F0A719EE2FF7960C /* RelayAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayAPI.swift; sourceTree = "<group>"; };
 		4B5FF3D9A36195329B8AAA1D /* Relay.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Relay.entitlements; sourceTree = "<group>"; };
 		5F54AB8D1B43CEB25B21FA77 /* telnyx-webrtc-ios */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "telnyx-webrtc-ios"; path = "Vendor/telnyx-webrtc-ios"; sourceTree = SOURCE_ROOT; };
+		758BCC6AC6809974D5CCAA69 /* PasskeyAssertion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyAssertion.swift; sourceTree = "<group>"; };
 		948EF6B3DA85FF1BA8CFC6EE /* RelayApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayApp.swift; sourceTree = "<group>"; };
 		A9A203471CB5071FE40FD885 /* VoiceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceManager.swift; sourceTree = "<group>"; };
 		B2640FB004F58617990C7498 /* Relay.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Relay.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -78,6 +80,7 @@
 				359767A5465051721E7F2076 /* Assets.xcassets */,
 				DD6546E114339B049F0E091E /* Info.plist */,
 				CA7CD7CDACF38A49E9FFF466 /* Models.swift */,
+				758BCC6AC6809974D5CCAA69 /* PasskeyAssertion.swift */,
 				ED85E9A4219730E3ADD5B415 /* PhoneViews.swift */,
 				4B5FF3D9A36195329B8AAA1D /* Relay.entitlements */,
 				3ECD94C0F0A719EE2FF7960C /* RelayAPI.swift */,
@@ -167,6 +170,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7E6AB347688C6AFC361EC8B5 /* Models.swift in Sources */,
+				C727B7F64710A04FE6FAE8D6 /* PasskeyAssertion.swift in Sources */,
 				143D298B8A2756210EB8981D /* PhoneViews.swift in Sources */,
 				8C972E1D9F33398EAE9E84C0 /* RelayAPI.swift in Sources */,
 				5537BF2868592255AAF0F670 /* RelayApp.swift in Sources */,
@@ -317,6 +321,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.relay;
 				PRODUCT_NAME = Relay;
 				RELAY_API_BASE_URL = "https://relay.example.com";
+				RELAY_PASSKEY_DOMAIN = relay.example.com;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = YES;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -344,6 +349,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.relay;
 				PRODUCT_NAME = Relay;
 				RELAY_API_BASE_URL = "https://relay.example.com";
+				RELAY_PASSKEY_DOMAIN = relay.example.com;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = YES;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
