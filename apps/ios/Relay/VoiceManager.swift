@@ -241,8 +241,16 @@ extension VoiceManager: CXProviderDelegate {
             catch { self.hasCall = false; self.status = .failed(error.localizedDescription); action.fail() }
         }
     }
-    nonisolated func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) { Task { @MainActor in self.call?.answer(); self.clearIncomingCallAlerts(); action.fulfill() } }
-    nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) { Task { @MainActor in self.call?.hangup(); self.finish(); action.fulfill() } }
+    // A call woken by VoIP push has no invite yet: the SDK logs in, waits for the invite and answers it,
+    // then fulfills the action itself. Answering our own (still nil) call here would do nothing.
+    nonisolated func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) { Task { @MainActor in self.status = .connecting; self.client.answerFromCallkit(answerAction: action); self.clearIncomingCallAlerts() } }
+    nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        Task { @MainActor in
+            // Declining a push call before its invite arrives must go through the SDK so Telnyx stops ringing it.
+            if self.call == nil { self.client.endCallFromCallkit(endAction: action) } else { self.call?.hangup(); action.fulfill() }
+            self.finish()
+        }
+    }
     nonisolated func provider(_ provider: CXProvider, perform action: CXPlayDTMFCallAction) { Task { @MainActor in self.sendDTMF(action.digits); action.fulfill() } }
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) { Task { @MainActor in if action.isOnHold { self.call?.hold() } else { self.call?.unhold() }; action.fulfill() } }
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) { Task { @MainActor in self.client.enableAudioSession(audioSession: audioSession); self.refreshAudioRoutes() } }
