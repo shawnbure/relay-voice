@@ -14,7 +14,10 @@ private let relayAccent = Color(uiColor: UIColor { traits in
         : UIColor(red: 0.09, green: 0.22, blue: 0.12, alpha: 1)
 })
 
-private enum ConversationRoute: Hashable { case history(Conversation), message(Conversation) }
+private enum ConversationRoute: Hashable {
+    case history(Conversation), message(Conversation)
+    var conversation: Conversation { switch self { case .history(let c), .message(let c): c } }
+}
 
 struct RootView: View {
     @EnvironmentObject private var session: RelaySession
@@ -154,7 +157,7 @@ private struct MainTabs: View {
     @State private var conversationPath: [ConversationRoute] = []
     var body: some View {
         TabView(selection: $selectedTab) {
-            NavigationStack(path: $conversationPath) { ConversationsView(path: $conversationPath) }.tabItem { Label("Conversations", image: "CommunicationTab") }.badge(session.unreadCount).tag(0)
+            ConversationsTab(path: $conversationPath).tabItem { Label("Conversations", image: "CommunicationTab") }.badge(session.unreadCount).tag(0)
             NavigationStack { DialerView { number in
                 conversationPath = [.message(Conversation(peer: number, displayName: number, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message))]
                 selectedTab = 0
@@ -177,8 +180,36 @@ private struct MainTabs: View {
     }
 }
 
+/// On a wide window (Mac, iPad) the list stays on the left and the open thread fills the right.
+/// On iPhone the thread pushes over the list.
+private struct ConversationsTab: View {
+    @Binding var path: [ConversationRoute]
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    var body: some View {
+        if sizeClass == .regular {
+            NavigationSplitView {
+                ConversationsView(path: $path, selectedPeer: path.last?.conversation.peer)
+                    .navigationSplitViewColumnWidth(min: 300, ideal: 380, max: 520)
+            } detail: {
+                NavigationStack {
+                    if let route = path.last {
+                        ThreadView(conversation: route.conversation, startComposing: { if case .message = route { true } else { false } }()).id(route)
+                    } else {
+                        ContentUnavailableView("No Conversation Selected", systemImage: "bubble.left.and.bubble.right", description: Text("Choose a conversation on the left."))
+                    }
+                }
+            }
+            .navigationSplitViewStyle(.balanced)
+        } else {
+            NavigationStack(path: $path) { ConversationsView(path: $path) }
+        }
+    }
+}
+
 private struct ConversationsView: View {
     @Binding var path: [ConversationRoute]
+    /// Set in the split layout, where the open thread stays highlighted in the list.
+    var selectedPeer: String? = nil
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
     @State private var query = ""
@@ -193,16 +224,16 @@ private struct ConversationsView: View {
             ForEach(conversations) { conversation in
             HStack(spacing: 12) {
                 Circle().fill(session.isUnread(conversation) ? Color.blue : Color.clear).frame(width: 10, height: 10).accessibilityHidden(!session.isUnread(conversation)).accessibilityLabel("Unread")
-                Button { if conversation.kind == .message { path.append(.message(named(conversation))) } else { voice.start(number: conversation.peer) } } label: {
+                Button { if conversation.kind == .message { path = [.message(named(conversation))] } else { voice.start(number: conversation.peer) } } label: {
                     Circle().fill(relayGreen.opacity(0.48)).frame(width: 48, height: 48).overlay(Image(systemName: conversation.kind == .message ? "message.fill" : "phone.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(relayInk))
                 }.buttonStyle(.plain).disabled(conversation.kind != .message && !voice.canStartCall).accessibilityLabel(conversation.kind == .message ? "Message \(conversation.peer.displayPhone)" : "Call \(conversation.peer.displayPhone)")
-                Button { path.append(.history(named(conversation))) } label: {
+                Button { path = [.history(named(conversation))] } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack { Text(displayName(for: conversation)).font(.headline.weight(session.isUnread(conversation) ? .heavy : .semibold)).foregroundStyle(.primary).lineLimit(1); if conversation.muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Notifications silenced") }; Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         Label(conversation.body.isEmpty ? conversation.kind.summary : conversation.body, systemImage: conversation.kind.icon).font(.subheadline.weight(session.isUnread(conversation) ? .semibold : .regular)).foregroundStyle(session.isUnread(conversation) ? Color.primary : Color.secondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityHint("Opens complete communication history")
-            }.padding(.vertical, 5).swipeActions(edge: .leading) {
+            }.padding(.vertical, 5).listRowBackground(selectedPeer == conversation.peer ? relayGreen.opacity(0.22) : Color.clear).swipeActions(edge: .leading) {
                 Button(showingArchive ? "Restore" : "Archive", systemImage: "archivebox") { Task { do { try await session.archive(peer: conversation.peer, archived: !showingArchive); await search() } catch { session.error = error.localizedDescription } } }.tint(.indigo)
                 Button(conversation.muted ? "Unmute" : "Silence", systemImage: conversation.muted ? "bell" : "bell.slash") { Task { await mute(conversation) } }.tint(conversation.muted ? .green : .orange)
             }.swipeActions(edge: .trailing) { Button("Delete", systemImage: "trash", role: .destructive) { Task { await delete(conversation) } } }
