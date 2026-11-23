@@ -141,8 +141,10 @@ private struct LockedView: View {
 }
 
 private extension View {
-    /// Sidebar navigation on iPad and Mac (iOS 18+); tab bar on iPhone.
-    @ViewBuilder func adaptiveTabs() -> some View { if #available(iOS 18.0, *) { self.tabViewStyle(.sidebarAdaptable) } else { self } }
+    /// Sidebar navigation on iPad (iOS 18+); tab bar on iPhone; tabs across the top on Mac, where a sidebar wastes width.
+    @ViewBuilder func adaptiveTabs() -> some View {
+        if #available(iOS 18.0, *), !ProcessInfo.processInfo.isMacCatalystApp { self.tabViewStyle(.sidebarAdaptable) } else { self }
+    }
 }
 
 private struct MainTabs: View {
