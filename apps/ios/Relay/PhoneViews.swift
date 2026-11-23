@@ -1,6 +1,9 @@
 import AudioToolbox
 import AVFoundation
 import ContactsUI
+#if targetEnvironment(macCatalyst)
+import ServiceManagement
+#endif
 import SwiftUI
 
 private let relayGreen = Color(red: 0.74, green: 0.96, blue: 0.29)
@@ -34,7 +37,13 @@ struct DialerView: View {
                             .accessibilityAddTraits(.isButton).accessibilityLabel("Delete digit").accessibilityHint("Touch and hold to clear the number")
                     }
                     Text(voice.status.label).font(.callout).foregroundStyle(.secondary)
-                }.frame(height: 78).padding(.horizontal, 20)
+                    if session.lines.count > 1 && !voice.isInCall {
+                        // Caller ID for calls and messages started here.
+                        Menu {
+                            ForEach(session.lines) { line in Button { Task { await session.selectLine(line.e164) } } label: { Label(line.name, systemImage: line.e164 == session.currentLine?.e164 ? "checkmark" : "phone") } }
+                        } label: { Label("From \(session.currentLine?.name ?? "")", systemImage: "chevron.up.chevron.down").font(.footnote.weight(.semibold)) }
+                    }
+                }.frame(height: session.lines.count > 1 ? 100 : 78).padding(.horizontal, 20)
                 Spacer(minLength: 12)
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(keySize), spacing: 24), count: 3), spacing: 14) {
                     ForEach(keys, id: \.self) { key in
@@ -48,7 +57,7 @@ struct DialerView: View {
                 } else {
                     HStack(spacing: 54) {
                         DialAction(title: "Message", icon: "message.fill", color: relayGreen, enabled: number.e164 != nil) { if let destination = number.e164 { onMessage(destination) } }
-                        DialAction(title: number.e164 == session.identity?.phone?.e164 ? "Test call" : "Call", icon: "phone.fill", color: .green, enabled: number.e164 != nil) { voice.start(number: number) }
+                        DialAction(title: number.e164 == session.currentLine?.e164 ? "Test Call" : "Call", icon: "phone.fill", color: .green, enabled: number.e164 != nil) { voice.start(number: number) }
                     }
                 }
                 Spacer(minLength: 18)
@@ -224,7 +233,7 @@ private struct CallControl: View {
                     .background(active ? relayGreen : Color(.secondarySystemBackground))
                     .foregroundStyle(active ? relayInk : Color.primary).clipShape(Circle())
                     .overlay(Circle().stroke(active ? relayInk.opacity(0.7) : Color(.separator), lineWidth: active ? 2.5 : 1))
-                Text(active ? "\(title) on" : title).font(.caption.weight(active ? .bold : .regular)).foregroundStyle(active ? relayInk : Color.primary)
+                Text(active ? "\(title) On" : title).font(.caption.weight(active ? .bold : .regular)).foregroundStyle(active ? relayInk : Color.primary)
             }
         }.buttonStyle(.plain).accessibilityValue(active ? "On" : "Off")
     }
@@ -256,7 +265,11 @@ struct IncomingCallView: View {
             Color.black.opacity(0.45).ignoresSafeArea()
             VStack(spacing: 24) {
                 Image(systemName: "phone.arrow.down.left.fill").font(.system(size: 34)).frame(width: 76, height: 76).background(relayGreen).foregroundStyle(relayInk).clipShape(Circle())
-                VStack(spacing: 6) { Text("Incoming Relay call").font(.subheadline).foregroundStyle(.secondary); Text(voice.remoteNumber.displayPhone).font(.title.bold()).minimumScaleFactor(0.7).lineLimit(1) }
+                VStack(spacing: 6) {
+                    Text("Incoming Relay Call").font(.subheadline).foregroundStyle(.secondary)
+                    Text(voice.remoteNumber.displayPhone).font(.title.bold()).minimumScaleFactor(0.7).lineLimit(1)
+                    if let line = voice.incomingLineName { Label("To \(line)", systemImage: "phone.arrow.down.left").font(.footnote.weight(.semibold)).foregroundStyle(.secondary) }
+                }
                 HStack(spacing: 54) {
                     VStack { Button { voice.hangup() } label: { Image(systemName: "phone.down.fill").font(.title2).frame(width: 68, height: 68).background(.red).foregroundStyle(.white).clipShape(Circle()) }; Text("Decline").font(.caption) }
                     VStack { Button { voice.answer() } label: { Image(systemName: "phone.fill").font(.title2).frame(width: 68, height: 68).background(.green).foregroundStyle(.white).clipShape(Circle()) }; Text("Answer").font(.caption) }
@@ -283,7 +296,7 @@ private struct InCallKeypadView: View {
                     }.buttonStyle(.plain).accessibilityLabel("Send \(key)")
                 }
             }
-            Button { voice.hangup(); dismiss() } label: { Label("Hang up", systemImage: "phone.down.fill").font(.headline).frame(maxWidth: .infinity).frame(height: 50) }.buttonStyle(.borderedProminent).tint(.red)
+            Button { voice.hangup(); dismiss() } label: { Label("Hang Up", systemImage: "phone.down.fill").font(.headline).frame(maxWidth: .infinity).frame(height: 50) }.buttonStyle(.borderedProminent).tint(.red)
         }.padding(20)
     }
 }
@@ -291,35 +304,162 @@ private struct InCallKeypadView: View {
 struct SettingsView: View {
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
+    @EnvironmentObject private var lock: AppLock
     @State private var saving = false
+    @State private var showingAddLine = false
+    @State private var editingLine: PhoneLine?
+    @State private var confirmingSignOut = false
+    @State private var showingPassword = false
+    @State private var openAtLogin = LoginItem.isEnabled
     @StateObject private var greetingRecorder = GreetingRecorder()
+    private var isMac: Bool { ProcessInfo.processInfo.isMacCatalystApp }
     var body: some View {
         Form {
-            Section("Relay line") {
-                LabeledContent { Text(session.identity?.phone?.e164.displayPhone ?? "Not provisioned").fontWeight(.semibold) } label: { Label("Your number", systemImage: "phone.fill") }
+            Section {
+                ForEach(session.lines) { line in
+                    Button { if session.identity?.user.role != "member" { editingLine = line } } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(line.name).fontWeight(.semibold).foregroundStyle(Color.primary)
+                                if line.label != nil { Text(line.e164.displayPhone).font(.caption).foregroundStyle(.secondary) }
+                            }
+                            Spacer()
+                            if line.e164 == session.currentLine?.e164 { Text("In Use").font(.caption.weight(.semibold)).foregroundStyle(.green) }
+                        }
+                    }.accessibilityHint("Rename this line")
+                }
+                if session.identity?.user.role == "owner" { Button { showingAddLine = true } label: { Label("Add Number", systemImage: "plus.circle.fill") } }
                 LabeledContent { Text(voice.status.label).foregroundStyle(voice.status == .ready ? .green : .secondary) } label: { Label("Calling", systemImage: "antenna.radiowaves.left.and.right") }
-            }
+            } header: { Text("Phone Numbers") } footer: { Text(session.lines.count > 1 ? "Switch numbers from the title at the top of Conversations. Each number has its own inbox." : "Add numbers you already own in Telnyx to use them in Relay.") }
             Section {
-                Toggle(isOn: binding(\.receiveMobile)) { Label("This iPhone", systemImage: "iphone") }
-                Toggle(isOn: binding(\.receiveWeb)) { Label("Web browsers", systemImage: "desktopcomputer") }
-            } header: { Text("Ring on") } footer: { Text("Push notifications wake Relay for incoming calls even when the app is not open.") }
+                Toggle(isOn: binding(\.receiveMobile)) { Label(isMac ? "This Mac" : "This iPhone", systemImage: isMac ? "laptopcomputer" : "iphone") }
+                Toggle(isOn: binding(\.receiveWeb)) { Label("Web Browsers", systemImage: "desktopcomputer") }
+            } header: { Text("Ring On") } footer: { Text(isMac ? "Relay rings on this Mac while the app is open." : "Push notifications wake Relay for incoming calls even when the app is not open.") }
             Section {
-                Toggle(isOn: binding(\.voicemailEnabled)) { Label("Answer missed calls", systemImage: "recordingtape") }
+                Toggle(isOn: binding(\.voicemailEnabled)) { Label("Answer Missed Calls", systemImage: "recordingtape") }
                 HStack {
-                    Label(session.settings.hasVoicemailGreeting ? "Personal greeting" : "Default greeting", systemImage: "waveform")
+                    Label(session.settings.hasVoicemailGreeting ? "Personal Greeting" : "Default Greeting", systemImage: "waveform")
                     Spacer()
                     if session.settings.hasVoicemailGreeting { Button { Task { _ = await AudioPlayback.shared.toggle(path: "/v1/settings/voicemail-greeting") } } label: { Image(systemName: "play.circle.fill").font(.title2) }.accessibilityLabel("Play greeting") }
                 }
-                Button { Task { await recordGreeting() } } label: { Label(greetingRecorder.isRecording ? "Stop and save" : "Record new greeting", systemImage: greetingRecorder.isRecording ? "stop.circle.fill" : "mic.circle.fill").foregroundStyle(greetingRecorder.isRecording ? .red : relayInk) }
+                Button { Task { await recordGreeting() } } label: { Label(greetingRecorder.isRecording ? "Stop and Save" : "Record New Greeting", systemImage: greetingRecorder.isRecording ? "stop.circle.fill" : "mic.circle.fill").foregroundStyle(greetingRecorder.isRecording ? .red : relayInk) }
             } header: { Text("Voicemail") } footer: { Text("Tap again to stop and save your greeting.") }
+            Section("Account") {
+                LabeledContent { Text(session.identity?.user.email ?? "").foregroundStyle(.secondary) } label: { Label("Signed In As", systemImage: "person.crop.circle") }
+                Toggle(isOn: $lock.isEnabled) { Label("Require \(lock.biometryName)", systemImage: "faceid") }
+                Button { showingPassword = true } label: { Label("Change Password", systemImage: "key.fill") }
+                if isMac {
+                    Toggle(isOn: Binding(get: { openAtLogin }, set: { value in
+                        do { try LoginItem.set(value); openAtLogin = LoginItem.isEnabled } catch { session.error = "Could not change Open at Login: \(error.localizedDescription)" }
+                    })) { Label("Open at Login", systemImage: "power") }
+                }
+                Button(role: .destructive) { confirmingSignOut = true } label: { Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") }
+            }
             Section { LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") }
         }.navigationTitle("Settings").overlay { if saving { ProgressView("Saving…").padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 12)) } }
+        .confirmationDialog("Sign Out of Relay?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
+            Button("Sign Out", role: .destructive) { Task { await session.signOut() } }
+        } message: { Text("This device stops ringing and getting notifications until you sign in again.") }
+        .sheet(isPresented: $showingPassword) { PasswordEditor().environmentObject(session) }
+        .sheet(isPresented: $showingAddLine) { LineEditor(mode: .add).environmentObject(session) }
+        .sheet(item: $editingLine) { LineEditor(mode: .rename($0)).environmentObject(session) }
     }
     private func binding(_ path: WritableKeyPath<RelaySettings, Bool>) -> Binding<Bool> { Binding(get: { session.settings[keyPath: path] }, set: { value in var next = session.settings; next[keyPath: path] = value; saving = true; Task { do { try await session.saveSettings(next) } catch { session.error = error.localizedDescription }; saving = false } }) }
     private func recordGreeting() async {
         do {
             if let recording = try await greetingRecorder.toggle() { saving = true; try await session.saveVoicemailGreeting(data: recording, contentType: "audio/mp4"); saving = false }
         } catch { saving = false; session.error = error.localizedDescription }
+    }
+}
+
+/// Starts Relay when you log in to the Mac, so it is running (and can ring) without opening it by hand.
+enum LoginItem {
+    static var isEnabled: Bool {
+        #if targetEnvironment(macCatalyst)
+        return SMAppService.mainApp.status == .enabled
+        #else
+        return false
+        #endif
+    }
+    static func set(_ enabled: Bool) throws {
+        #if targetEnvironment(macCatalyst)
+        if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        #endif
+    }
+}
+
+/// Sets a new account password (used by the apps and the web).
+private struct PasswordEditor: View {
+    @EnvironmentObject private var session: RelaySession
+    @Environment(\.dismiss) private var dismiss
+    @State private var password = ""
+    @State private var confirm = ""
+    @State private var working = false
+    @State private var message: String?
+    private var valid: Bool { password.count >= 12 && password == confirm }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    SecureField("New Password", text: $password).textContentType(.newPassword)
+                    SecureField("Confirm Password", text: $confirm).textContentType(.newPassword)
+                } footer: { Text(confirm.isEmpty || password == confirm ? "At least 12 characters. Used to sign in to Relay on iPhone, Mac, and the web." : "The passwords don't match.") }
+                if let message { Section { Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) } }
+            }
+            .navigationTitle("Change Password").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { if working { ProgressView() } else { Button("Save") { Task { await save() } }.disabled(!valid) } }
+            }
+        }
+    }
+    private func save() async {
+        working = true; message = nil; defer { working = false }
+        do { try await session.changePassword(password); dismiss() } catch { message = error.localizedDescription }
+    }
+}
+
+/// Adds a number the account already owns in Telnyx, or renames an existing line.
+private struct LineEditor: View {
+    enum Mode { case add, rename(PhoneLine) }
+    let mode: Mode
+    @EnvironmentObject private var session: RelaySession
+    @Environment(\.dismiss) private var dismiss
+    @State private var number = ""
+    @State private var label = ""
+    @State private var working = false
+    @State private var message: String?
+    private var isAdding: Bool { if case .add = mode { return true }; return false }
+    var body: some View {
+        NavigationStack {
+            Form {
+                if case .rename(let line) = mode {
+                    LabeledContent("Number", value: line.e164.displayPhone)
+                } else {
+                    Section { TextField("Phone Number", text: $number).keyboardType(.phonePad).textContentType(.telephoneNumber) } footer: { Text("Use a number already in your Telnyx account. Relay sets it up for texts and calls; nothing is purchased.") }
+                }
+                Section { TextField("Label (Optional)", text: $label) } footer: { Text("For example Work or Personal. Shown in the line switcher and on alerts.") }
+                if let message { Section { Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) } }
+            }
+            .navigationTitle(isAdding ? "Add Number" : "Rename Line").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    if working { ProgressView() } else { Button(isAdding ? "Add" : "Save") { Task { await save() } }.disabled(isAdding && number.e164 == nil) }
+                }
+            }
+            .task { if case .rename(let line) = mode { label = line.label ?? "" } }
+        }
+    }
+    private func save() async {
+        working = true; message = nil; defer { working = false }
+        do {
+            switch mode {
+            case .add: guard let e164 = number.e164 else { return }; try await session.addLine(e164: e164, label: label)
+            case .rename(let line): try await session.renameLine(e164: line.e164, label: label)
+            }
+            dismiss()
+        } catch { message = error.localizedDescription }
     }
 }
 

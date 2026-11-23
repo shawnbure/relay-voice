@@ -3,7 +3,7 @@ import Security
 
 enum RelayAPIError: LocalizedError {
     case invalidResponse, unauthorized, server(String)
-    var errorDescription: String? { switch self { case .invalidResponse: "Relay returned an invalid response."; case .unauthorized: "Connect this iPhone to Relay again."; case .server(let message): message } }
+    var errorDescription: String? { switch self { case .invalidResponse: "Relay returned an invalid response."; case .unauthorized: "Your session has ended. Sign in to Relay again."; case .server(let message): message } }
 }
 
 @MainActor
@@ -31,10 +31,12 @@ final class RelayAPI {
         if let body { request.httpBody = try JSONEncoder().encode(AnyEncodable(body)); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw RelayAPIError.invalidResponse }
-        if http.statusCode == 401 { throw RelayAPIError.unauthorized }
-        guard (200..<300).contains(http.statusCode) else { throw RelayAPIError.server((try? JSONDecoder().decode(APIErrorBody.self, from: data).error) ?? "Relay request failed (\(http.statusCode)).") }
+        // A 401 from the sign-in endpoint is a wrong password, not an expired session.
+        if http.statusCode == 401 && !path.hasPrefix("/v1/auth/") { throw RelayAPIError.unauthorized }
+        guard (200..<300).contains(http.statusCode) else { throw RelayAPIError.server(Self.sentenceCase((try? JSONDecoder().decode(APIErrorBody.self, from: data).error) ?? "Relay request failed (\(http.statusCode)).")) }
         return try JSONDecoder.relay.decode(T.self, from: data)
     }
+    private static func sentenceCase(_ message: String) -> String { message.prefix(1).uppercased() + message.dropFirst() + (message.hasSuffix(".") ? "" : ".") }
     func mediaRequest(_ path: String) -> URLRequest { var request = URLRequest(url: URL(string: path, relativeTo: baseURL)!); if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }; return request }
     func upload(_ path: String, data: Data, contentType: String) async throws {
         var request = mediaRequest(path); request.httpMethod = "PUT"; request.httpBody = data; request.setValue(contentType, forHTTPHeaderField: "Content-Type")

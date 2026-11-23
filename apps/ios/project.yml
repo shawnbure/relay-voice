@@ -21,7 +21,14 @@ targets:
         RELAY_API_BASE_URL: https://relay.example.com
         PRODUCT_NAME: Relay
         SWIFT_VERSION: 5.0
-        TARGETED_DEVICE_FAMILY: "1"
+        # iPhone and iPad; the iPad build also runs as the Mac app (Mac Catalyst).
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: YES
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        # Same bundle ID on Mac so APNs alerts (topic com.<team>.relay) reach it too.
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Relay/RelayMac.entitlements
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Relay/Info.plist
         CODE_SIGN_ENTITLEMENTS: Relay/Relay.entitlements

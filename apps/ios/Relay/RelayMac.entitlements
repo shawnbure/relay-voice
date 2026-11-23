@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <!-- Mac (Catalyst) build: sandboxed, with network, microphone, contacts and picked files. -->
+  <key>com.apple.security.app-sandbox</key><true/>
+  <key>com.apple.security.network.client</key><true/>
+  <key>com.apple.security.device.audio-input</key><true/>
+  <key>com.apple.security.personal-information.addressbook</key><true/>
+  <key>com.apple.security.personal-information.photos-library</key><true/>
+  <key>com.apple.security.files.user-selected.read-only</key><true/>
+  <key>com.apple.developer.aps-environment</key><string>development</string>
+  <key>com.apple.developer.usernotifications.time-sensitive</key><true/>
+</dict></plist>

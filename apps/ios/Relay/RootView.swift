@@ -1,5 +1,6 @@
 import AVFoundation
 import Contacts
+import LocalAuthentication
 import Photos
 import PhotosUI
 import SwiftUI
@@ -17,31 +18,120 @@ private enum ConversationRoute: Hashable { case history(Conversation), message(C
 
 struct RootView: View {
     @EnvironmentObject private var session: RelaySession
+    @EnvironmentObject private var voice: VoiceManager
+    @EnvironmentObject private var lock: AppLock
     var body: some View {
         Group {
             switch session.state {
             case .loading: ProgressView("Opening Relay…")
-            case .disconnected: ConnectView()
+            case .disconnected: SignInView()
             case .connected: MainTabs()
             }
         }
+        // Never hide a ringing or live call behind the lock screen.
+        .overlay { if lock.isLocked && session.state == .connected && !voice.isInCall { LockedView() } }
         .tint(relayAccent)
         .alert("Relay", isPresented: Binding(get: { session.error != nil }, set: { if !$0 { session.error = nil } })) { Button("OK") { session.error = nil } } message: { Text(session.error ?? "") }
     }
 }
 
-private struct ConnectView: View {
+private struct RelayMark: View {
+    var body: some View { ZStack { RoundedRectangle(cornerRadius: 28).fill(relayGreen).frame(width: 92, height: 92); Text("R").font(.system(size: 54, weight: .black)).foregroundStyle(relayInk) } }
+}
+
+private struct SignInView: View {
     @EnvironmentObject private var session: RelaySession
+    @EnvironmentObject private var lock: AppLock
+    @State private var email = UserDefaults.standard.string(forKey: "relay.lastEmail") ?? ""
+    @State private var password = ""
+    @State private var signingIn = false
+    @State private var message: String?
+    @FocusState private var focus: Field?
+    private enum Field { case email, password }
+    private var canSubmit: Bool { email.contains("@") && !password.isEmpty && !signingIn }
     var body: some View {
-        VStack(spacing: 22) {
-            Spacer()
-            ZStack { RoundedRectangle(cornerRadius: 28).fill(relayGreen).frame(width: 92, height: 92); Text("R").font(.system(size: 54, weight: .black)).foregroundStyle(relayInk) }
-            VStack(spacing: 8) { Text("Relay").font(.largeTitle.bold()); Text("Owner access has not been installed on this device.").multilineTextAlignment(.center).foregroundStyle(.secondary) }
-            Spacer()
-            Button { Task { await session.restore() } } label: { Label("Retry", systemImage: "arrow.clockwise").frame(maxWidth: .infinity).padding() }.buttonStyle(.borderedProminent).tint(relayInk)
-            Text("There is no account login. Relay is configured automatically when installed on your devices.").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-        }.padding(28).background(Color(.systemGroupedBackground))
+        ScrollView {
+            VStack(spacing: 22) {
+                RelayMark().padding(.top, 60)
+                VStack(spacing: 6) { Text("Sign In to Relay").font(.largeTitle.bold()); Text("Use the email and password for your Relay account.").multilineTextAlignment(.center).foregroundStyle(.secondary) }
+                VStack(spacing: 12) {
+                    TextField("Email", text: $email).textContentType(.username).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($focus, equals: .email).submitLabel(.next).onSubmit { focus = .password }
+                        .padding(14).background(Color(.secondarySystemGroupedBackground)).clipShape(RoundedRectangle(cornerRadius: 12))
+                    SecureField("Password", text: $password).textContentType(.password)
+                        .focused($focus, equals: .password).submitLabel(.go).onSubmit { Task { await signIn() } }
+                        .padding(14).background(Color(.secondarySystemGroupedBackground)).clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                if let message { Label(message, systemImage: "exclamationmark.triangle.fill").font(.footnote).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading) }
+                Button { Task { await signIn() } } label: {
+                    Group { if signingIn { ProgressView().tint(.white) } else { Text("Sign In").fontWeight(.semibold) } }.frame(maxWidth: .infinity).frame(height: 30)
+                }.buttonStyle(.borderedProminent).tint(relayInk).controlSize(.large).disabled(!canSubmit)
+            }.padding(28).frame(maxWidth: 440)
+        }
+        .frame(maxWidth: .infinity).background(Color(.systemGroupedBackground))
+        .task { focus = email.isEmpty ? .email : .password }
     }
+    private func signIn() async {
+        guard canSubmit else { return }
+        signingIn = true; message = nil
+        defer { signingIn = false }
+        do {
+            try await session.signIn(email: email.trimmingCharacters(in: .whitespaces), password: password)
+            lock.markUnlocked()
+            UserDefaults.standard.set(email.trimmingCharacters(in: .whitespaces), forKey: "relay.lastEmail")
+            password = ""
+        } catch { message = error.localizedDescription }
+    }
+}
+
+/// Face ID / Touch ID gate. Locks on launch and after 5 minutes in the background, when turned on in Settings.
+@MainActor final class AppLock: ObservableObject {
+    static let enabledKey = "relay.requireBiometrics"
+    @Published private(set) var isLocked: Bool
+    @Published var isEnabled: Bool { didSet { UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey); if !isEnabled { isLocked = false } } }
+    private var backgroundedAt: Date?
+    private var authenticating = false
+    init() {
+        let enabled = UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true
+        // Only lock a signed-in app; the sign-in screen already asks for the password.
+        isEnabled = enabled; isLocked = enabled && Keychain.read("relay.mobile.token") != nil
+    }
+    func markUnlocked() { isLocked = false; backgroundedAt = nil }
+    var biometryName: String {
+        let context = LAContext(); _ = context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
+        switch context.biometryType { case .faceID: return "Face ID"; case .touchID: return "Touch ID"; case .opticID: return "Optic ID"; default: return "Passcode" }
+    }
+    func didEnterBackground() { backgroundedAt = .now }
+    func didBecomeActive() async {
+        guard Keychain.read("relay.mobile.token") != nil else { isLocked = false; backgroundedAt = nil; return }
+        if isEnabled, let backgroundedAt, Date().timeIntervalSince(backgroundedAt) > 300 { isLocked = true }
+        backgroundedAt = nil
+        if isLocked { await unlock() }
+    }
+    func unlock() async {
+        guard isLocked, !authenticating else { return }
+        authenticating = true; defer { authenticating = false }
+        let context = LAContext()
+        // Falls back to the device passcode (or Mac password) when biometrics are unavailable.
+        if (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock Relay")) == true { isLocked = false }
+    }
+}
+
+private struct LockedView: View {
+    @EnvironmentObject private var lock: AppLock
+    var body: some View {
+        VStack(spacing: 20) {
+            RelayMark()
+            Text("Relay Is Locked").font(.title2.bold())
+            Button { Task { await lock.unlock() } } label: { Label("Unlock With \(lock.biometryName)", systemImage: "lock.open.fill").fontWeight(.semibold).frame(maxWidth: 280).frame(height: 30) }
+                .buttonStyle(.borderedProminent).tint(relayInk).controlSize(.large)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(.regularMaterial)
+    }
+}
+
+private extension View {
+    /// Sidebar navigation on iPad and Mac (iOS 18+); tab bar on iPhone.
+    @ViewBuilder func adaptiveTabs() -> some View { if #available(iOS 18.0, *) { self.tabViewStyle(.sidebarAdaptable) } else { self } }
 }
 
 private struct MainTabs: View {
@@ -58,6 +148,7 @@ private struct MainTabs: View {
             } }.tabItem { Label("Keypad", systemImage: "circle.grid.3x3.fill") }.tag(1)
             NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
         }
+        .adaptiveTabs()
         .toolbarBackground(.visible, for: .tabBar)
         .onChange(of: session.notificationPeer) { _, peer in
             guard let peer else { return }
@@ -104,10 +195,10 @@ private struct ConversationsView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
-                Text(session.identity?.phone?.e164.displayPhone ?? "Conversations")
-                    .font(.title2.bold()).lineLimit(1).minimumScaleFactor(0.75)
+                LineTitle()
+                    .lineLimit(1).minimumScaleFactor(0.75)
                     .contentShape(Rectangle()).highPriorityGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
-                        if let number = session.identity?.phone?.e164 {
+                        if let number = session.currentLine?.e164 {
                             UIPasteboard.general.string = number.displayPhone
                             numberCopied = true
                             copyFeedbackTask?.cancel()
@@ -145,7 +236,7 @@ private struct ConversationsView: View {
         .refreshable { await session.refresh() }
         .task { localContactNames = await loadLocalContactNames() }
         .task(id: "\(query)|\(showingArchive)|\(session.activityRevision)") { await search() }
-        .overlay { if conversations.isEmpty { ContentUnavailableView(query.isEmpty ? "No conversations" : "No results", systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass", description: Text(query.isEmpty ? "Tap compose to call or message a new number." : "Try a different name or phone number.")) } }
+        .overlay { if conversations.isEmpty { ContentUnavailableView(query.isEmpty ? "No Conversations" : "No Results", systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass", description: Text(query.isEmpty ? "Tap compose to call or message a new number." : "Try a different name or phone number.")) } }
         .toolbar(.hidden, for: .navigationBar)
     }
     private func displayName(for conversation: Conversation) -> String { conversation.displayName == conversation.peer ? localContactNames[conversation.peer] ?? conversation.peer.displayPhone : conversation.displayName }
@@ -160,6 +251,36 @@ private struct ConversationsView: View {
     private func named(_ conversation: Conversation) -> Conversation { Conversation(peer: conversation.peer, displayName: displayName(for: conversation), body: conversation.body, direction: conversation.direction, status: conversation.status, occurredAt: conversation.occurredAt, kind: conversation.kind, muted: conversation.muted) }
     private func mute(_ conversation: Conversation) async { do { try await session.mute(peer: conversation.peer, muted: !conversation.muted); await search() } catch { session.error = error.localizedDescription } }
     private func delete(_ conversation: Conversation) async { do { try await session.deleteConversation(peer: conversation.peer) } catch { session.error = error.localizedDescription } }
+}
+
+/// The inbox title: the current line's name. With several lines it is a menu that switches between them.
+private struct LineTitle: View {
+    @EnvironmentObject private var session: RelaySession
+    var body: some View {
+        let lines = session.lines
+        if lines.count > 1 {
+            Menu {
+                ForEach(lines) { line in
+                    Button { Task { await session.selectLine(line.e164) } } label: {
+                        let unread = session.unreadLines[line.e164] ?? 0
+                        Label(unread > 0 ? "\(line.name) (\(unread))" : line.name, systemImage: line.e164 == session.currentLine?.e164 ? "checkmark" : "phone")
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(session.currentLine?.name ?? "Conversations").font(.title2.bold()).foregroundStyle(Color.primary)
+                        if session.currentLine?.label != nil { Text(session.currentLine?.e164.displayPhone ?? "").font(.caption).foregroundStyle(.secondary) }
+                    }
+                    Image(systemName: "chevron.down").font(.subheadline.weight(.bold)).foregroundStyle(.secondary)
+                    // A dot when another line has unread activity.
+                    if lines.contains(where: { $0.e164 != session.currentLine?.e164 && (session.unreadLines[$0.e164] ?? 0) > 0 }) { Circle().fill(Color.blue).frame(width: 8, height: 8).accessibilityLabel("Another line has unread activity") }
+                }
+            }.accessibilityLabel("Switch line, current \(session.currentLine?.name ?? "")")
+        } else {
+            Text(session.currentLine?.e164.displayPhone ?? "Conversations").font(.title2.bold())
+        }
+    }
 }
 
 private func loadLocalContactNames() async -> [String: String] {
@@ -197,13 +318,13 @@ private struct ThreadView: View {
                 ScrollView {
                     LazyVStack(spacing: 10) {
                         if activity.isEmpty {
-                            ContentUnavailableView("No history yet", systemImage: "bubble.left", description: Text("Send a message or tap the phone button to start.")).padding(.top, 90)
+                            ContentUnavailableView("No History Yet", systemImage: "bubble.left", description: Text("Send a message or tap the phone button to start.")).padding(.top, 90)
                         }
                         ForEach(activity) { item in
                             ActivityRow(item: item).id(item.id).contextMenu {
                                 if item.kind == .message {
                                     if !item.body.isEmpty { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = item.body } }
-                                    Button("Delete message", systemImage: "trash", role: .destructive) { Task { await delete(item) } }
+                                    Button("Delete Message", systemImage: "trash", role: .destructive) { Task { await delete(item) } }
                                 }
                             }
                         }
@@ -276,7 +397,7 @@ private struct MessageComposer: View {
             HStack(alignment: .bottom, spacing: 8) {
                 Menu {
                     PhotosPicker(selection: $photoItem, matching: .images) { Label("Photo Library", systemImage: "photo.on.rectangle") }
-                    Button { showingCamera = true } label: { Label("Take Photo", systemImage: "camera") }
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) { Button { showingCamera = true } label: { Label("Take Photo", systemImage: "camera") } }
                     Button { showingFiles = true } label: { Label("Choose File", systemImage: "folder") }
                 } label: { Image(systemName: "plus").font(.headline).frame(width: 34, height: 34).background(Color(.tertiarySystemFill)).clipShape(Circle()) }.accessibilityLabel("Add attachment")
                 TextField("Message", text: $draft, axis: .vertical)
@@ -446,7 +567,8 @@ private struct NewConversationView: View {
         VStack(spacing: 24) {
             VStack(spacing: 8) {
                 Image(systemName: "phone.badge.plus").font(.system(size: 34, weight: .medium)).foregroundStyle(relayAccent).padding(.top, 28)
-                Text("Who would you like to reach?").font(.title3.bold())
+                Text("Who Would You Like to Reach?").font(.title3.bold())
+                if session.lines.count > 1, let line = session.currentLine { Text("From \(line.name)").font(.footnote.weight(.semibold)).foregroundStyle(relayAccent) }
                 Text("Enter a phone number or choose a contact.").font(.subheadline).foregroundStyle(.secondary)
             }
             HStack(spacing: 10) {

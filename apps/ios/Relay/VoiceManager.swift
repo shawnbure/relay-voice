@@ -23,6 +23,12 @@ final class VoiceManager: NSObject, ObservableObject {
     @Published private(set) var hasCall = false
     @Published private(set) var audioRoutes = [AudioRoute(id: "receiver", name: "iPhone", kind: .receiver), AudioRoute(id: "speaker", name: "Speaker", kind: .speaker)]
     @Published private(set) var selectedAudioRouteID = "receiver"
+    /// "To Work" when the account has several lines, so an incoming call shows which number was dialed.
+    @Published private(set) var incomingLineName: String?
+
+    /// Macs have no CallKit call screen or VoIP wakeups: Relay rings and handles calls itself there.
+    static let usesCallKit = !ProcessInfo.processInfo.isMacCatalystApp
+    private let ringer = Ringer()
 
     var isInCall: Bool { hasCall }
     var isCallActive: Bool { status == .active || status == .held }
@@ -52,7 +58,7 @@ final class VoiceManager: NSObject, ObservableObject {
         provider = CXProvider(configuration: configuration)
         super.init()
         client.delegate = self; provider.setDelegate(self, queue: .main)
-        let registry = PKPushRegistry(queue: .main); registry.delegate = self; registry.desiredPushTypes = [.voIP]; self.registry = registry
+        if Self.usesCallKit { let registry = PKPushRegistry(queue: .main); registry.delegate = self; registry.desiredPushTypes = [.voIP]; self.registry = registry }
         audioRouteObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.refreshAudioRoutes() } }
     }
 
@@ -68,7 +74,9 @@ final class VoiceManager: NSObject, ObservableObject {
             try client.connect(txConfig: config)
         } catch { status = .failed(error.localizedDescription); scheduleReconnect() }
     }
-    func disconnect() { reconnectTask?.cancel(); reconnectTask = nil; client.disconnect(); call = nil; hasCall = false; incoming = false; status = .offline }
+    func disconnect() { reconnectTask?.cancel(); reconnectTask = nil; client.disconnect(); ringer.stop(); call = nil; hasCall = false; incoming = false; status = .offline; ownNumber = ""; api = nil }
+    /// Outgoing calls show this line as caller ID.
+    func useLine(_ e164: String) { if !e164.isEmpty { ownNumber = e164 } }
     func ensureConnected() async {
         guard call == nil, status != .ready, status != .connecting, let api, !ownNumber.isEmpty else { return }
         reconnectTask?.cancel(); reconnectTask = nil; status = .offline
@@ -78,11 +86,30 @@ final class VoiceManager: NSObject, ObservableObject {
         guard canStartCall, let destination = number.e164 else { return }
         remoteNumber = destination; hasCall = true; incoming = false; status = .connecting
         let id = UUID(); currentCallID = id
+        guard Self.usesCallKit else {
+            do { client.enableAudioSession(audioSession: AVAudioSession.sharedInstance()); try placeCall(destination: destination, id: id) }
+            catch { hasCall = false; status = .failed(error.localizedDescription) }
+            return
+        }
         let action = CXStartCallAction(call: id, handle: CXHandle(type: .phoneNumber, value: destination))
         request(CXTransaction(action: action))
     }
-    func answer() { guard let id = call?.callInfo?.callId ?? currentCallID else { return }; request(CXTransaction(action: CXAnswerCallAction(call: id))) }
-    func hangup() { guard let id = call?.callInfo?.callId ?? currentCallID else { return }; status = .ending; request(CXTransaction(action: CXEndCallAction(call: id))) }
+    func answer() {
+        guard let id = call?.callInfo?.callId ?? currentCallID else { return }
+        guard Self.usesCallKit else { ringer.stop(); client.enableAudioSession(audioSession: AVAudioSession.sharedInstance()); call?.answer(); clearIncomingCallAlerts(); return }
+        request(CXTransaction(action: CXAnswerCallAction(call: id)))
+    }
+    func hangup() {
+        guard let id = call?.callInfo?.callId ?? currentCallID else { return }; status = .ending
+        guard Self.usesCallKit else { call?.hangup(); finish(); return }
+        request(CXTransaction(action: CXEndCallAction(call: id)))
+    }
+    private func placeCall(destination requested: String, id: UUID) throws {
+        let destination = requested.e164 == ownNumber ? selfTarget : requested.phoneDigits
+        guard !destination.isEmpty else { throw RelayAPIError.server("Self-test calling is still connecting.") }
+        call = try client.newCall(callerName: "Relay", callerNumber: ownNumber.phoneDigits, destinationNumber: destination, callId: id)
+        hasCall = true
+    }
     func sendDTMF(_ digit: String) {
         guard hasCall, digit.count == 1, "0123456789*#".contains(digit) else { return }
         call?.dtmf(dtmf: digit)
@@ -121,9 +148,13 @@ final class VoiceManager: NSObject, ObservableObject {
             center.removeDeliveredNotifications(withIdentifiers: ids)
         }
     }
-    private func finish() { clearIncomingCallAlerts(); call = nil; currentCallID = nil; hasCall = false; incoming = false; reportedIncomingCalls.removeAll(); remoteNumber = ""; startedAt = nil; muted = false; speaker = false; status = .ready }
+    private func finish() {
+        ringer.stop(); incomingLineName = nil
+        if !Self.usesCallKit { client.disableAudioSession(audioSession: AVAudioSession.sharedInstance()) }
+        clearIncomingCallAlerts(); call = nil; currentCallID = nil; hasCall = false; incoming = false; reportedIncomingCalls.removeAll(); remoteNumber = ""; startedAt = nil; muted = false; speaker = false; status = .ready }
     private func reportIncomingCall(id: UUID, number: String) {
         guard reportedIncomingCalls.insert(id).inserted else { return }
+        guard Self.usesCallKit else { ringer.start(); return }
         let update = CXCallUpdate(); update.remoteHandle = CXHandle(type: .phoneNumber, value: number); update.localizedCallerName = number.e164?.displayPhone ?? number; update.hasVideo = false; update.supportsDTMF = true; update.supportsHolding = true; update.supportsGrouping = false; update.supportsUngrouping = false
         provider.reportNewIncomingCall(with: id, update: update) { [weak self] error in if error != nil { Task { @MainActor in self?.reportedIncomingCalls.remove(id) } } }
     }
@@ -172,13 +203,14 @@ extension VoiceManager: TxClientDelegate {
         Task { @MainActor in
             switch callState {
             case .ACTIVE:
-                self.hasCall = true; self.incoming = false; self.status = .active; self.startedAt = self.startedAt ?? Date(); self.provider.reportOutgoingCall(with: callId, connectedAt: Date())
+                self.ringer.stop()
+                self.hasCall = true; self.incoming = false; self.status = .active; self.startedAt = self.startedAt ?? Date(); if Self.usesCallKit { self.provider.reportOutgoingCall(with: callId, connectedAt: Date()) }
             case .RINGING:
                 self.hasCall = true; self.status = .ringing
             case .HELD:
                 self.hasCall = true; self.status = .held
             case .DONE, .DROPPED:
-                self.provider.reportCall(with: callId, endedAt: Date(), reason: .remoteEnded); self.finish()
+                if Self.usesCallKit { self.provider.reportCall(with: callId, endedAt: Date(), reason: .remoteEnded) }; self.finish()
             case .NEW, .CONNECTING, .RECONNECTING:
                 self.hasCall = true; self.status = .connecting
             }
@@ -187,12 +219,14 @@ extension VoiceManager: TxClientDelegate {
     nonisolated func onIncomingCall(call: Call) {
         Task { @MainActor in
             self.call = call; self.hasCall = true; self.incoming = true; self.remoteNumber = call.callInfo?.callerNumber ?? "Unknown"; self.status = .ringing
+            // The server labels calls to a secondary line "To <line>" in the caller name.
+            if let name = call.callInfo?.callerName, name.hasPrefix("To ") { self.incomingLineName = String(name.dropFirst(3)) }
             guard let id = call.callInfo?.callId else { return }
             self.currentCallID = id
             self.reportIncomingCall(id: id, number: self.remoteNumber)
         }
     }
-    nonisolated func onRemoteCallEnded(callId: UUID, reason: CallTerminationReason?) { Task { @MainActor in self.reportedIncomingCalls.remove(callId); self.provider.reportCall(with: callId, endedAt: Date(), reason: .remoteEnded); self.finish() } }
+    nonisolated func onRemoteCallEnded(callId: UUID, reason: CallTerminationReason?) { Task { @MainActor in self.reportedIncomingCalls.remove(callId); if Self.usesCallKit { self.provider.reportCall(with: callId, endedAt: Date(), reason: .remoteEnded) }; self.finish() } }
     nonisolated func onPushCall(call: Call) { onIncomingCall(call: call) }
 }
 
@@ -201,11 +235,8 @@ extension VoiceManager: CXProviderDelegate {
     nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         Task { @MainActor in
             do {
-                let requested = action.handle.value.e164
-                let destination = requested == self.ownNumber ? self.selfTarget : action.handle.value.phoneDigits
-                guard !destination.isEmpty else { throw RelayAPIError.server("Self-test calling is still connecting.") }
-                self.call = try self.client.newCall(callerName: "Relay", callerNumber: self.ownNumber.phoneDigits, destinationNumber: destination, callId: action.callUUID)
-                self.hasCall = true; self.provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: Date()); action.fulfill()
+                try self.placeCall(destination: action.handle.value, id: action.callUUID)
+                self.provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: Date()); action.fulfill()
             }
             catch { self.hasCall = false; self.status = .failed(error.localizedDescription); action.fail() }
         }
@@ -251,3 +282,31 @@ extension VoiceManager: PKPushRegistryDelegate {
 }
 
 private struct EmptyBody: Encodable {}
+
+/// A classic two-tone phone ring (440 Hz + 480 Hz, 2 s on, 4 s off), synthesized so no audio file is needed.
+/// Used on Mac, where no system call screen rings for us.
+@MainActor private final class Ringer {
+    private var player: AVAudioPlayer?
+    func start() {
+        guard player?.isPlaying != true else { return }
+        player = try? AVAudioPlayer(data: Self.ringWave(), fileTypeHint: AVFileType.wav.rawValue)
+        player?.numberOfLoops = -1; player?.volume = 0.8; player?.play()
+    }
+    func stop() { player?.stop(); player = nil }
+    private static func ringWave() -> Data {
+        let rate = 16_000, seconds = 6, samples = rate * seconds
+        var pcm = Data(capacity: samples * 2)
+        for i in 0..<samples {
+            let t = Double(i) / Double(rate)
+            let on = t.truncatingRemainder(dividingBy: 6) < 2
+            let value = on ? 0.25 * (sin(2 * .pi * 440 * t) + sin(2 * .pi * 480 * t)) : 0
+            withUnsafeBytes(of: Int16(value * Double(Int16.max)).littleEndian) { pcm.append(contentsOf: $0) }
+        }
+        var header = Data()
+        func append<T: FixedWidthInteger>(_ v: T) { withUnsafeBytes(of: v.littleEndian) { header.append(contentsOf: $0) } }
+        header.append(contentsOf: Array("RIFF".utf8)); append(UInt32(36 + pcm.count)); header.append(contentsOf: Array("WAVEfmt ".utf8))
+        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(rate)); append(UInt32(rate * 2)); append(UInt16(2)); append(UInt16(16))
+        header.append(contentsOf: Array("data".utf8)); append(UInt32(pcm.count))
+        return header + pcm
+    }
+}

@@ -110,11 +110,13 @@ export async function enableTelephonyCredentialInbound(apiKey: string, credentia
   return connectionId;
 }
 
-export async function dialRelayClient(apiKey: string, input: { applicationId: string; sipUsername: string; callerNumber: string; inboundCallControlId: string }): Promise<string> {
+export async function dialRelayClient(apiKey: string, input: { applicationId: string; sipUsername: string; callerNumber: string; inboundCallControlId: string; lineName?: string | null }): Promise<string> {
   const created = dataOf(await telnyxJson(apiKey, "POST", "/calls", {
     connection_id: input.applicationId,
     to: `sip:${input.sipUsername}@sip.telnyx.com`,
     from: input.callerNumber,
+    // With several lines, the app shows which one the caller dialed.
+    ...(input.lineName ? { from_display_name: `To ${input.lineName}`.slice(0, 128) } : {}),
     link_to: input.inboundCallControlId,
     bridge_on_answer: true,
     prevent_double_bridge: true,

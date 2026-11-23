@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { enqueueNotification, enqueueDeliveries, drainPushes, unreadState, sendIncomingCallAlert } from './notifications';
+import { enqueueNotification, enqueueDeliveries, drainPushes, unreadState, sendIncomingCallAlert, lineDisplayName } from './notifications';
 import { cors } from "hono/cors";
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from "@simplewebauthn/server";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
@@ -12,6 +12,17 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 const E164 = /^\+[1-9]\d{7,14}$/;
 // Conversation peers are E.164 numbers or carrier short codes (e.g. 39569) that text us.
 const PEER = /^(\+[1-9]\d{7,14}|\d{3,8})$/;
+// "Line" = which of the workspace's own numbers a record belongs to.
+const MESSAGE_LINE = "CASE WHEN direction='inbound' THEN to_number ELSE from_number END";
+/** Resolves the optional ?line= filter. "" means all lines; null means the number is not one of this workspace's lines. */
+async function lineFilter(db: D1Database, tenantId: string, value: string | undefined): Promise<string | null> {
+  const line = value?.trim() ?? "";
+  if (!line) return "";
+  if (!E164.test(line)) return null;
+  const owned = await db.prepare("SELECT 1 owned FROM phone_numbers WHERE tenant_id=? AND e164=?").bind(tenantId, line).first();
+  return owned ? line : null;
+}
+function newMobileToken() { return `rly_${Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`; }
 
 app.use("/v1/*", cors({ origin: (origin, c) => origin === new URL(c.req.url).origin ? origin : new URL(c.req.url).origin, credentials: true }));
 app.use("/v1/*", requireSameOrigin);
@@ -68,6 +79,34 @@ app.post("/v1/auth/password/login", async (c) => {
   await c.env.DB.prepare("DELETE FROM password_attempts WHERE hostname=? AND client_hash=?").bind(hostname,clientHash).run();
   await createSession(c,user.id);
   return c.json({authenticated:true});
+});
+
+// Native apps (iPhone, Mac) sign in with the account email and password and receive a long-lived device token.
+app.post("/v1/auth/mobile/login", async (c) => {
+  const hostname = new URL(c.req.url).hostname.toLowerCase();
+  const body = await c.req.json<{ email?: string; password?: string; deviceName?: string }>().catch(() => ({} as { email?: string; password?: string; deviceName?: string }));
+  const email = body.email?.trim().toLowerCase() ?? ""; const password = body.password ?? "";
+  if (!email || !password) return c.json({ error: "email and password are required" }, 400);
+  const clientHash = await sha256(c.req.header("cf-connecting-ip") ?? "unknown");
+  await c.env.DB.prepare("DELETE FROM password_attempts WHERE created_at < datetime('now','-1 day')").run();
+  const recent = await c.env.DB.prepare("SELECT COUNT(*) count FROM password_attempts WHERE hostname=? AND client_hash=? AND succeeded=0 AND created_at > datetime('now','-15 minutes')").bind(hostname, clientHash).first<{ count: number }>();
+  if (Number(recent?.count ?? 0) >= 8) return c.json({ error: "too many sign-in attempts; try again in 15 minutes" }, 429, { "Retry-After": "900" });
+  const user = await c.env.DB.prepare(`SELECT u.id, m.tenant_id, u.password_hash, u.password_salt FROM tenant_domains d JOIN memberships m ON m.tenant_id=d.tenant_id JOIN users u ON u.id=m.user_id WHERE d.hostname=? AND lower(u.email)=? LIMIT 1`)
+    .bind(hostname, email).first<{ id: string; tenant_id: string; password_hash: string | null; password_salt: string | null }>();
+  // Always run the hash so a wrong email and a wrong password take the same time.
+  const valid = await verifyPassword(password, user?.password_hash ?? null, user?.password_salt ?? null);
+  await c.env.DB.prepare("INSERT INTO password_attempts(id,hostname,client_hash,succeeded) VALUES(?,?,?,?)").bind(crypto.randomUUID(), hostname, clientHash, valid ? 1 : 0).run();
+  if (!valid || !user) return c.json({ error: "incorrect email or password" }, 401);
+  await c.env.DB.prepare("DELETE FROM password_attempts WHERE hostname=? AND client_hash=?").bind(hostname, clientHash).run();
+  const token = newMobileToken();
+  const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO mobile_api_tokens (id, tenant_id, user_id, token_hash, device_name, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), user.tenant_id, user.id, await sha256(token), body.deviceName?.trim().slice(0, 80) || "Relay app", expiresAt),
+    c.env.DB.prepare("INSERT INTO audit_log(id,tenant_id,user_id,action,metadata) VALUES(?,?,?,'mobile.signed_in',?)")
+      .bind(crypto.randomUUID(), user.tenant_id, user.id, JSON.stringify({ device: body.deviceName?.slice(0, 80) ?? null })),
+  ]);
+  return c.json({ token, expiresAt }, 201);
 });
 
 app.post("/v1/auth/register/options", async (c) => {
@@ -201,24 +240,43 @@ app.put('/v1/mobile/push-device', async c => {
   c.executionCtx.waitUntil(drainPushes(c.env));
   return c.json({registered:true});
 });
-app.get('/v1/unread', async c => c.json(await unreadState(c.env,c.get('principal').tenantId)));
+app.get('/v1/unread', async c => {
+  const {tenantId} = c.get('principal');
+  const line = await lineFilter(c.env.DB, tenantId, c.req.query('line'));
+  if (line === null) return c.json({error:'unknown line'},404);
+  return c.json(await unreadState(c.env,tenantId,line));
+});
 app.put('/v1/conversations/read', async c => {
   const {tenantId} = c.get('principal');
-  const {peer,through} = await c.req.json<{peer:string;through:string}>();
+  const {peer,through,line:requestedLine} = await c.req.json<{peer:string;through:string;line?:string}>();
   if (!PEER.test(peer ?? '') || !Number.isFinite(Date.parse(through))) return c.json({error:'valid peer and read timestamp required'},400);
-  const result = await c.env.DB.prepare('UPDATE notification_items SET read_at=? WHERE tenant_id=? AND peer=? AND read_at IS NULL AND occurred_at<=?').bind(new Date().toISOString(),tenantId,peer,through).run();
+  const line = await lineFilter(c.env.DB, tenantId, requestedLine);
+  if (line === null) return c.json({error:'unknown line'},404);
+  const result = await c.env.DB.prepare("UPDATE notification_items SET read_at=? WHERE tenant_id=? AND peer=? AND read_at IS NULL AND occurred_at<=? AND (?='' OR line=?)").bind(new Date().toISOString(),tenantId,peer,through,line,line).run();
   if (result.meta.changes) {
     await enqueueDeliveries(c.env,tenantId,null);
     c.executionCtx.waitUntil(drainPushes(c.env));
     c.executionCtx.waitUntil(c.env.EVENTS.getByName(tenantId).broadcast(JSON.stringify({type:'conversation.read',peer})));
   }
-  return c.json(await unreadState(c.env,tenantId));
+  return c.json(await unreadState(c.env,tenantId,line));
+});
+
+app.post("/v1/auth/mobile/logout", async (c) => {
+  const p = c.get("principal");
+  const bearer = c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
+  const body = await c.req.json<{ installationId?: string }>().catch(() => ({} as { installationId?: string }));
+  const statements = [];
+  if (bearer?.startsWith("rly_")) statements.push(c.env.DB.prepare("UPDATE mobile_api_tokens SET revoked_at=CURRENT_TIMESTAMP WHERE token_hash=? AND user_id=?").bind(await sha256(bearer), p.userId));
+  // Stop sending this device notifications for a workspace it is no longer signed in to.
+  if (body.installationId && /^[0-9a-f-]{36}$/i.test(body.installationId)) statements.push(c.env.DB.prepare("DELETE FROM push_devices WHERE tenant_id=? AND user_id=? AND id=?").bind(p.tenantId, p.userId, body.installationId));
+  if (statements.length) await c.env.DB.batch(statements);
+  return c.json({ signedOut: true });
 });
 
 app.post("/v1/mobile/token", async (c) => {
   const p = c.get("principal");
   const body: { deviceName?: string } = await c.req.json<{ deviceName?: string }>().catch(() => ({}));
-  const token = `rly_${Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  const token = newMobileToken();
   const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
   await c.env.DB.prepare("INSERT INTO mobile_api_tokens (id, tenant_id, user_id, token_hash, device_name, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(crypto.randomUUID(), p.tenantId, p.userId, await sha256(token), body.deviceName?.slice(0, 80) || "Relay for iPhone", expiresAt).run();
@@ -228,20 +286,21 @@ app.post("/v1/mobile/token", async (c) => {
 app.get("/v1/me", async (c) => {
   const p = c.get("principal");
   const me = await c.env.DB.prepare(`SELECT u.id, u.email, u.display_name, t.id tenant_id, t.name tenant_name, m.role FROM users u JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.id=? AND t.id=?`).bind(p.userId, p.tenantId).first();
-  const phone = await c.env.DB.prepare("SELECT id, e164 FROM phone_numbers WHERE tenant_id = ? ORDER BY created_at LIMIT 1").bind(p.tenantId).first();
-  return c.json({ user: me, phone });
+  const phones = await c.env.DB.prepare("SELECT id, e164, label FROM phone_numbers WHERE tenant_id = ? ORDER BY created_at").bind(p.tenantId).all();
+  return c.json({ user: me, phone: phones.results[0] ?? null, phones: phones.results });
 });
 
 app.post("/v1/admin/phone-number", async (c) => {
   const principal = c.get("principal");
   if (principal.role !== "owner") return c.json({ error: "owner access required" }, 403);
-  const { e164 = "" } = await c.req.json<{ e164?: string }>();
+  const { e164 = "", label = "" } = await c.req.json<{ e164?: string; label?: string }>();
   const normalized = e164.trim();
+  const cleanLabel = label.trim().slice(0, 40) || null;
   if (!E164.test(normalized)) return c.json({ error: "a valid E.164 phone number is required" }, 400);
 
-  const existing = await c.env.DB.prepare("SELECT tenant_id FROM phone_numbers WHERE e164=? OR tenant_id=? LIMIT 1")
-    .bind(normalized, principal.tenantId).first<{ tenant_id: string }>();
-  if (existing) return c.json({ error: existing.tenant_id === principal.tenantId ? "workspace already has a phone number" : "phone number is assigned to another workspace" }, 409);
+  const existing = await c.env.DB.prepare("SELECT tenant_id FROM phone_numbers WHERE e164=?")
+    .bind(normalized).first<{ tenant_id: string }>();
+  if (existing) return c.json({ error: existing.tenant_id === principal.tenantId ? "this number is already one of your lines" : "phone number is assigned to another workspace" }, 409);
 
   const provider = await c.env.DB.prepare(`
     SELECT messaging_profile_id, connection_id
@@ -258,15 +317,26 @@ app.post("/v1/admin/phone-number", async (c) => {
     credentialName: `relay-${principal.tenantId}`,
     webhookUrl: `${new URL(c.req.url).origin}/v1/webhooks/telnyx`,
   });
+  // Every line rings the same calling login, so only the first number creates the credential row.
+  const hasCredential = await c.env.DB.prepare("SELECT 1 present FROM telephony_credentials WHERE tenant_id=? AND user_id=?").bind(principal.tenantId, principal.userId).first();
   await c.env.DB.batch([
-    c.env.DB.prepare("INSERT INTO phone_numbers(id,tenant_id,e164,telnyx_number_id,messaging_profile_id,connection_id) VALUES(?,?,?,?,?,?)")
-      .bind(crypto.randomUUID(), principal.tenantId, normalized, provisioned.numberId, provider.messaging_profile_id, provider.connection_id),
-    c.env.DB.prepare("INSERT INTO telephony_credentials(id,tenant_id,user_id,telnyx_credential_id) VALUES(?,?,?,?)")
-      .bind(crypto.randomUUID(), principal.tenantId, principal.userId, provisioned.credentialId),
+    c.env.DB.prepare("INSERT INTO phone_numbers(id,tenant_id,e164,telnyx_number_id,messaging_profile_id,connection_id,label) VALUES(?,?,?,?,?,?,?)")
+      .bind(crypto.randomUUID(), principal.tenantId, normalized, provisioned.numberId, provider.messaging_profile_id, provider.connection_id, cleanLabel),
+    ...(hasCredential ? [] : [c.env.DB.prepare("INSERT INTO telephony_credentials(id,tenant_id,user_id,telnyx_credential_id) VALUES(?,?,?,?)")
+      .bind(crypto.randomUUID(), principal.tenantId, principal.userId, provisioned.credentialId)]),
     c.env.DB.prepare("INSERT INTO audit_log(id,tenant_id,user_id,action,metadata) VALUES(?,?,?,'phone_number.provisioned',?)")
       .bind(crypto.randomUUID(), principal.tenantId, principal.userId, JSON.stringify({ e164: normalized, telnyxNumberId: provisioned.numberId })),
   ]);
-  return c.json({ phone: { e164: normalized }, provisioned: true }, 201);
+  return c.json({ phone: { e164: normalized, label: cleanLabel }, provisioned: true }, 201);
+});
+
+app.put("/v1/phone-numbers/label", async (c) => {
+  const principal = c.get("principal");
+  if (principal.role === "member") return c.json({ error: "admin access required" }, 403);
+  const { e164 = "", label = "" } = await c.req.json<{ e164?: string; label?: string }>();
+  const result = await c.env.DB.prepare("UPDATE phone_numbers SET label=? WHERE tenant_id=? AND e164=?").bind(label.trim().slice(0, 40) || null, principal.tenantId, e164.trim()).run();
+  if (!result.meta.changes) return c.json({ error: "line not found" }, 404);
+  return c.json({ saved: true });
 });
 
 app.get("/v1/admin/telnyx/10dlc", async (c) => {
@@ -299,22 +369,28 @@ app.get("/v1/conversations", async (c) => {
   const { tenantId } = c.get("principal");
   const query = (c.req.query("q") ?? "").trim().slice(0, 200);
   const archived = c.req.query("archived") === "true" ? 1 : 0;
+  const line = await lineFilter(c.env.DB, tenantId, c.req.query("line"));
+  if (line === null) return c.json({ error: "unknown line" }, 404);
   const result = await c.env.DB.prepare(`
-    WITH activity AS (
+    WITH all_activity AS (
       SELECT CASE WHEN direction='inbound' THEN from_number ELSE to_number END peer,
+        CASE WHEN direction='inbound' THEN to_number ELSE from_number END line,
         body, direction, status, occurred_at, 'message' kind
       FROM messages WHERE tenant_id=?
       UNION ALL
       SELECT CASE WHEN direction='inbound' THEN from_number ELSE to_number END peer,
+        CASE WHEN direction='inbound' THEN to_number ELSE from_number END line,
         CASE WHEN direction='inbound' THEN 'Incoming call' ELSE 'Outgoing call' END body,
         direction, status, started_at occurred_at, 'call' kind
       FROM calls WHERE tenant_id=?
       UNION ALL
-      SELECT from_number peer, 'Voicemail' body, 'inbound' direction, status, occurred_at, 'voicemail' kind
+      SELECT from_number peer, to_number line, 'Voicemail' body, 'inbound' direction, status, occurred_at, 'voicemail' kind
       FROM voicemails WHERE tenant_id=?
+    ), activity AS (
+      SELECT * FROM all_activity WHERE ?='' OR line=?
     ), ranked AS (
       SELECT activity.*, ROW_NUMBER() OVER (PARTITION BY peer ORDER BY occurred_at DESC) rn FROM activity
-    ) SELECT r.peer, r.body, r.direction, r.status, r.occurred_at, r.kind, COALESCE(c.display_name, r.peer) display_name,
+    ) SELECT r.peer, r.line, r.body, r.direction, r.status, r.occurred_at, r.kind, COALESCE(c.display_name, r.peer) display_name,
         EXISTS (SELECT 1 FROM conversation_mutes mute WHERE mute.tenant_id=? AND mute.peer=r.peer) muted
       FROM ranked r LEFT JOIN contacts c ON c.tenant_id=? AND c.phone_number=r.peer
       WHERE r.rn=1
@@ -325,7 +401,7 @@ app.get("/v1/conversations", async (c) => {
           OR (r.peer NOT GLOB '*[^0-9]*' AND length(r.peer) BETWEEN 3 AND 8))
         AND NOT EXISTS (SELECT 1 FROM phone_numbers owned WHERE owned.tenant_id=? AND owned.e164=r.peer)
       ORDER BY r.occurred_at DESC LIMIT 100
-  `).bind(tenantId, tenantId, tenantId, tenantId, tenantId, query, query, query, query, tenantId, archived, tenantId).all<Record<string, unknown> & { muted: number }>();
+  `).bind(tenantId, tenantId, tenantId, line, line, tenantId, tenantId, query, query, query, query, tenantId, archived, tenantId).all<Record<string, unknown> & { muted: number }>();
   return c.json({ data: result.results.map((row) => ({ ...row, muted: Boolean(row.muted) })) });
 });
 
@@ -363,15 +439,18 @@ app.delete("/v1/conversations", async (c) => {
   const { tenantId } = c.get("principal");
   const peer = c.req.query("peer");
   if (!peer || !PEER.test(peer)) return c.json({ error: "valid peer is required" }, 400);
+  const line = await lineFilter(c.env.DB, tenantId, c.req.query("line"));
+  if (line === null) return c.json({ error: "unknown line" }, 404);
+  const onLine = `AND (?='' OR ${MESSAGE_LINE}=?)`;
   const [messageRows, voicemailRows] = await Promise.all([
-    c.env.DB.prepare("SELECT media_json FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?))").bind(tenantId, peer, peer).all<{ media_json: string }>(),
-    c.env.DB.prepare("SELECT object_key FROM voicemails WHERE tenant_id=? AND from_number=? AND object_key IS NOT NULL").bind(tenantId, peer).all<{ object_key: string }>(),
+    c.env.DB.prepare(`SELECT media_json FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?)) ${onLine}`).bind(tenantId, peer, peer, line, line).all<{ media_json: string }>(),
+    c.env.DB.prepare("SELECT object_key FROM voicemails WHERE tenant_id=? AND from_number=? AND object_key IS NOT NULL AND (?='' OR to_number=?)").bind(tenantId, peer, line, line).all<{ object_key: string }>(),
   ]);
   const results = await c.env.DB.batch([
-    c.env.DB.prepare("DELETE FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?))").bind(tenantId, peer, peer),
-    c.env.DB.prepare("DELETE FROM calls WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?))").bind(tenantId, peer, peer),
-    c.env.DB.prepare("DELETE FROM voicemails WHERE tenant_id=? AND from_number=?").bind(tenantId, peer),
-    c.env.DB.prepare("DELETE FROM notification_items WHERE tenant_id=? AND peer=?").bind(tenantId, peer),
+    c.env.DB.prepare(`DELETE FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?)) ${onLine}`).bind(tenantId, peer, peer, line, line),
+    c.env.DB.prepare(`DELETE FROM calls WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?)) ${onLine}`).bind(tenantId, peer, peer, line, line),
+    c.env.DB.prepare("DELETE FROM voicemails WHERE tenant_id=? AND from_number=? AND (?='' OR to_number=?)").bind(tenantId, peer, line, line),
+    c.env.DB.prepare("DELETE FROM notification_items WHERE tenant_id=? AND peer=? AND (?='' OR line=?)").bind(tenantId, peer, line, line),
   ]);
   await enqueueDeliveries(c.env,tenantId,null);
   c.executionCtx.waitUntil(drainPushes(c.env));
@@ -387,7 +466,9 @@ app.get("/v1/messages", async (c) => {
   const { tenantId } = c.get("principal");
   const peer = c.req.query("peer");
   if (!peer || !PEER.test(peer)) return c.json({ error: "valid peer is required" }, 400);
-  const result = await c.env.DB.prepare(`SELECT id, direction, from_number, to_number, body, status, occurred_at FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?)) ORDER BY occurred_at ASC LIMIT 500`).bind(tenantId, peer, peer).all();
+  const line = await lineFilter(c.env.DB, tenantId, c.req.query("line"));
+  if (line === null) return c.json({ error: "unknown line" }, 404);
+  const result = await c.env.DB.prepare(`SELECT id, direction, from_number, to_number, body, status, occurred_at FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?)) AND (?='' OR ${MESSAGE_LINE}=?) ORDER BY occurred_at ASC LIMIT 500`).bind(tenantId, peer, peer, line, line).all();
   return c.json({ data: result.results });
 });
 
@@ -395,22 +476,24 @@ app.get("/v1/activity", async (c) => {
   const { tenantId } = c.get("principal");
   const peer = c.req.query("peer");
   if (!peer || !PEER.test(peer)) return c.json({ error: "valid peer is required" }, 400);
+  const line = await lineFilter(c.env.DB, tenantId, c.req.query("line"));
+  if (line === null) return c.json({ error: "unknown line" }, 404);
   const result = await c.env.DB.prepare(`
     SELECT id, 'message' kind, direction, body, status, occurred_at,
       media_json media, delivered_at, NULL answered_at, NULL ended_at, NULL duration_seconds
-    FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?))
+    FROM messages WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?)) AND (?='' OR ${MESSAGE_LINE}=?)
     UNION ALL
     SELECT id, 'call' kind, direction,
       CASE WHEN direction='inbound' THEN 'Incoming call' ELSE 'Outgoing call' END body,
       status, started_at occurred_at, '[]' media, NULL delivered_at, answered_at, ended_at,
       CASE WHEN ended_at IS NOT NULL THEN CAST(strftime('%s', ended_at) - strftime('%s', COALESCE(answered_at, started_at)) AS INTEGER) ELSE NULL END duration_seconds
-    FROM calls WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?))
+    FROM calls WHERE tenant_id=? AND ((direction='inbound' AND from_number=?) OR (direction='outbound' AND to_number=?)) AND (?='' OR ${MESSAGE_LINE}=?)
     UNION ALL
     SELECT id, 'voicemail' kind, 'inbound' direction, 'Voicemail' body, status, occurred_at,
       '[]' media, NULL delivered_at, NULL answered_at, NULL ended_at, duration_seconds
-    FROM voicemails WHERE tenant_id=? AND from_number=?
+    FROM voicemails WHERE tenant_id=? AND from_number=? AND (?='' OR to_number=?)
     ORDER BY occurred_at ASC LIMIT 750
-  `).bind(tenantId, peer, peer, tenantId, peer, peer, tenantId, peer).all<Record<string, unknown>>();
+  `).bind(tenantId, peer, peer, line, line, tenantId, peer, peer, line, line, tenantId, peer, line, line).all<Record<string, unknown>>();
   return c.json({ data: result.results.map((row) => ({ ...row, media: typeof row.media === "string" ? JSON.parse(row.media) : [] })) });
 });
 
@@ -442,11 +525,14 @@ app.get("/v1/voicemails/:id/audio", async (c) => {
 
 app.post("/v1/messages", async (c) => {
   const p = c.get("principal");
-  const body = await c.req.json<{ to?: string; text?: string; attachment?: { name?: string; contentType?: string; base64?: string } }>();
+  const body = await c.req.json<{ to?: string; from?: string; text?: string; attachment?: { name?: string; contentType?: string; base64?: string } }>();
   const to = body.to?.trim(); const text = body.text?.trim() ?? "";
   if (!to || !PEER.test(to) || (!text && !body.attachment) || text.length > 1600) return c.json({ error: "valid destination number and message content are required" }, 400);
-  const phone = await c.env.DB.prepare("SELECT e164 FROM phone_numbers WHERE tenant_id=? ORDER BY created_at LIMIT 1").bind(p.tenantId).first<{ e164: string }>();
-  if (!phone) return c.json({ error: "workspace has no provisioned phone number" }, 409);
+  // Send from the requested line; without one, from the workspace's first number.
+  const phone = body.from?.trim()
+    ? await c.env.DB.prepare("SELECT e164 FROM phone_numbers WHERE tenant_id=? AND e164=?").bind(p.tenantId, body.from.trim()).first<{ e164: string }>()
+    : await c.env.DB.prepare("SELECT e164 FROM phone_numbers WHERE tenant_id=? ORDER BY created_at LIMIT 1").bind(p.tenantId).first<{ e164: string }>();
+  if (!phone) return c.json({ error: body.from ? "that number is not one of your lines" : "workspace has no provisioned phone number" }, body.from ? 404 : 409);
   const media: StoredMedia[] = [];
   const mediaUrls: string[] = [];
   if (body.attachment) {
@@ -557,7 +643,10 @@ app.get("/v1/settings/voicemail-greeting", async (c) => {
 });
 
 app.get("/v1/calls", async (c) => {
-  const result = await c.env.DB.prepare("SELECT id, direction, from_number, to_number, status, started_at, ended_at FROM calls WHERE tenant_id=? ORDER BY started_at DESC LIMIT 100").bind(c.get("principal").tenantId).all();
+  const { tenantId } = c.get("principal");
+  const line = await lineFilter(c.env.DB, tenantId, c.req.query("line"));
+  if (line === null) return c.json({ error: "unknown line" }, 404);
+  const result = await c.env.DB.prepare(`SELECT id, direction, from_number, to_number, status, started_at, ended_at FROM calls WHERE tenant_id=? AND (?='' OR ${MESSAGE_LINE}=?) ORDER BY started_at DESC LIMIT 100`).bind(tenantId, line, line).all();
   return c.json({ data: result.results });
 });
 
@@ -601,7 +690,7 @@ async function applyMessageEvent(env: Env, ctx: { waitUntil(promise: Promise<unk
     const storedMedia = downloadableMedia.map((item, index) => ({ key: `${number.tenant_id}/messages/${localId}/${index}`, contentType: item.content_type ?? "application/octet-stream", size: item.size }));
     const receivedAt = payload.received_at ?? occurredAt;
     await env.DB.prepare("INSERT OR IGNORE INTO messages (id, tenant_id, telnyx_message_id, direction, from_number, to_number, body, status, occurred_at, delivered_at, media_json) VALUES (?, ?, ?, 'inbound', ?, ?, ?, 'received', ?, ?, ?)").bind(localId, number.tenant_id, id, from, to, payload.text ?? "", receivedAt, receivedAt, JSON.stringify(storedMedia)).run();
-    await enqueueNotification(env,{id:`message:${id}`,tenantId:number.tenant_id,peer:from,kind:'message',body:payload.text || (storedMedia.length ? 'Attachment' : 'New message'),at:payload.received_at ?? occurredAt});
+    await enqueueNotification(env,{id:`message:${id}`,tenantId:number.tenant_id,peer:from,line:to,kind:'message',body:payload.text || (storedMedia.length ? 'Attachment' : 'New message'),at:payload.received_at ?? occurredAt});
     ctx.waitUntil(drainPushes(env));
     if (storedMedia.length) ctx.waitUntil(persistMessageMedia(env, downloadableMedia, storedMedia).catch((error) => {
       console.error(JSON.stringify({ event: "message_media_persist_failed", telnyxMessageId: id, message: error instanceof Error ? error.message : String(error) }));
@@ -664,7 +753,7 @@ async function applyRecordingEvent(env: Env, ctx: { waitUntil(promise: Promise<u
     if (!response.ok || !response.body) throw new Error(`Telnyx voicemail download failed (${response.status})`);
     await env.MEDIA.put(objectKey, response.body, { httpMetadata: { contentType, cacheControl: "private, no-store" } });
     await env.DB.prepare("UPDATE voicemails SET status='ready' WHERE tenant_id=? AND telnyx_recording_id=?").bind(call.tenant_id, payload.recording_id).run();
-    await enqueueNotification(env,{id:`voicemail:${payload.recording_id}`,tenantId:call.tenant_id,peer:call.from_number,kind:'voicemail',body:'Voicemail ready to play',at:occurredAt});
+    await enqueueNotification(env,{id:`voicemail:${payload.recording_id}`,tenantId:call.tenant_id,peer:call.from_number,line:call.to_number,kind:'voicemail',body:'Voicemail ready to play',at:occurredAt});
     await drainPushes(env);
     await env.EVENTS.getByName(call.tenant_id).broadcast(JSON.stringify({ type: "voicemail.ready", at: new Date().toISOString() }));
   })());
@@ -707,22 +796,22 @@ async function applyAndRouteCallEvent(env: Env, eventType: string, occurredAt: s
     if (!from || !to) return tenantId;
     const muted = await env.DB.prepare("SELECT 1 muted FROM conversation_mutes WHERE tenant_id=? AND peer=?").bind(tenantId, from).first();
     if (muted) return tenantId;
-    const phone = await env.DB.prepare("SELECT connection_id FROM phone_numbers WHERE tenant_id=? AND e164=?").bind(tenantId, to).first<{ connection_id: string }>();
+    const phone = await env.DB.prepare("SELECT connection_id, label FROM phone_numbers WHERE tenant_id=? AND e164=?").bind(tenantId, to).first<{ connection_id: string; label: string | null }>();
     const credential = await env.DB.prepare("SELECT telnyx_credential_id FROM telephony_credentials WHERE tenant_id=? ORDER BY created_at LIMIT 1").bind(tenantId).first<{ telnyx_credential_id: string }>();
     if (!phone || !credential) throw new Error("Inbound call cannot be routed because voice is not provisioned");
     const sipUsername = await getTelephonyCredentialSipUsername(env.TELNYX_API_KEY, credential.telnyx_credential_id);
-    const clientCallControlId = await dialRelayClient(env.TELNYX_API_KEY, { applicationId: phone.connection_id, sipUsername, callerNumber: from, inboundCallControlId: callControlId });
+    const clientCallControlId = await dialRelayClient(env.TELNYX_API_KEY, { applicationId: phone.connection_id, sipUsername, callerNumber: from, inboundCallControlId: callControlId, lineName: await lineDisplayName(env, tenantId, to) });
     await env.DB.prepare("INSERT OR IGNORE INTO inbound_call_routes (id, tenant_id, inbound_call_control_id, client_call_control_id, caller_number, relay_number, status) VALUES (?, ?, ?, ?, ?, ?, 'ringing')")
       .bind(crypto.randomUUID(), tenantId, callControlId, clientCallControlId, from, to).run();
     // Fallback ring alert: shows even when the app is closed and VoIP push does not wake it.
-    await sendIncomingCallAlert(env, tenantId, from, callControlId).catch(error => console.error(JSON.stringify({ event: 'incoming_call_alert_failed', error: String(error) })));
+    await sendIncomingCallAlert(env, tenantId, from, callControlId, to).catch(error => console.error(JSON.stringify({ event: 'incoming_call_alert_failed', error: String(error) })));
   } else if (eventType === "call.hangup") {
     if (tenantId) {
-      const call = await env.DB.prepare('SELECT answered_at,from_number,direction FROM calls WHERE tenant_id=? AND telnyx_call_control_id=?').bind(tenantId,callControlId).first<{answered_at:string|null;from_number:string;direction:string}>();
+      const call = await env.DB.prepare('SELECT answered_at,from_number,to_number,direction FROM calls WHERE tenant_id=? AND telnyx_call_control_id=?').bind(tenantId,callControlId).first<{answered_at:string|null;from_number:string;to_number:string;direction:string}>();
       const clientAnswered = await env.DB.prepare('SELECT answered_at FROM answered_call_routes WHERE inbound_call_control_id=?').bind(callControlId).first();
       // A bridged client is answered; voicemail answering the PSTN leg is not.
       if (call?.direction === 'inbound' && !clientAnswered && (routeBeforeHangup ? routeBeforeHangup.status !== 'bridged' : !call.answered_at)) {
-        await enqueueNotification(env,{id:`missed:${callControlId}`,tenantId,peer:call.from_number,kind:'missed_call',body:'You missed a call',at:occurredAt});
+        await enqueueNotification(env,{id:`missed:${callControlId}`,tenantId,peer:call.from_number,line:call.to_number,kind:'missed_call',body:'You missed a call',at:occurredAt});
       }
     }
     await env.DB.prepare("UPDATE inbound_call_routes SET status='caller_hangup', updated_at=? WHERE inbound_call_control_id=?").bind(occurredAt, callControlId).run();

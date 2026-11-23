@@ -27,9 +27,11 @@
 		A9A203471CB5071FE40FD885 /* VoiceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceManager.swift; sourceTree = "<group>"; };
 		B2640FB004F58617990C7498 /* Relay.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Relay.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6F8D0187C9233E0C9D9A53E /* RelaySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySession.swift; sourceTree = "<group>"; };
+		C3DFA637D0FC8F2C4CFEDE1B /* RelayFree.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RelayFree.entitlements; sourceTree = "<group>"; };
 		CA7CD7CDACF38A49E9FFF466 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		DD6546E114339B049F0E091E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E212F7E468560D5F17EB0BA1 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		E57089DC885AA5B8D999EE8D /* RelayMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RelayMac.entitlements; sourceTree = "<group>"; };
 		ED85E9A4219730E3ADD5B415 /* PhoneViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -80,6 +82,8 @@
 				4B5FF3D9A36195329B8AAA1D /* Relay.entitlements */,
 				3ECD94C0F0A719EE2FF7960C /* RelayAPI.swift */,
 				948EF6B3DA85FF1BA8CFC6EE /* RelayApp.swift */,
+				C3DFA637D0FC8F2C4CFEDE1B /* RelayFree.entitlements */,
+				E57089DC885AA5B8D999EE8D /* RelayMac.entitlements */,
 				B6F8D0187C9233E0C9D9A53E /* RelaySession.swift */,
 				E212F7E468560D5F17EB0BA1 /* RootView.swift */,
 				A9A203471CB5071FE40FD885 /* VoiceManager.swift */,
@@ -299,7 +303,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Relay/Relay.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Relay/RelayMac.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Relay/Info.plist;
@@ -307,12 +313,15 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.relay;
-				RELAY_API_BASE_URL = "https://relay.example.com";
 				PRODUCT_NAME = Relay;
+				RELAY_API_BASE_URL = "https://relay.example.com";
 				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -321,7 +330,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Relay/Relay.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Relay/RelayMac.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Relay/Info.plist;
@@ -329,12 +340,15 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.relay;
-				RELAY_API_BASE_URL = "https://relay.example.com";
 				PRODUCT_NAME = Relay;
+				RELAY_API_BASE_URL = "https://relay.example.com";
 				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};

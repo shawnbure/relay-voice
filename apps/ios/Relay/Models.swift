@@ -6,14 +6,23 @@ struct RelayIdentity: Decodable {
         enum CodingKeys: String, CodingKey { case displayName = "display_name", email, tenantName = "tenant_name", role }
     }
     struct Phone: Decodable { let e164: String }
-    let user: User; let phone: Phone?
+    let user: User; let phone: Phone?; let phones: [PhoneLine]?
+    /// Every number on the account, oldest first.
+    var lines: [PhoneLine] { phones ?? (phone.map { [PhoneLine(e164: $0.e164, label: nil)] } ?? []) }
+}
+
+/// One of the account's own phone numbers.
+struct PhoneLine: Decodable, Identifiable, Hashable {
+    var id: String { e164 }
+    let e164: String; var label: String?
+    var name: String { label.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? e164.displayPhone }
 }
 
 enum ActivityKind: String, Decodable { case message, call, voicemail }
 struct Conversation: Decodable, Identifiable, Hashable {
     var id: String { peer }
-    let peer: String; let displayName: String; let body: String; let direction: String; let status: String; let occurredAt: Date; let kind: ActivityKind; var muted = false
-    enum CodingKeys: String, CodingKey { case peer, displayName = "display_name", body, direction, status, occurredAt = "occurred_at", kind, muted }
+    let peer: String; let displayName: String; let body: String; let direction: String; let status: String; let occurredAt: Date; let kind: ActivityKind; var muted = false; var line: String? = nil
+    enum CodingKeys: String, CodingKey { case peer, displayName = "display_name", body, direction, status, occurredAt = "occurred_at", kind, muted, line }
 }
 struct MediaItem: Decodable, Hashable { let key: String; let contentType: String; let size: Int? }
 struct ActivityItem: Decodable, Identifiable, Hashable {

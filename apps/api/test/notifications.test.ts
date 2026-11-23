@@ -42,3 +42,13 @@ test('notification state is tenant scoped, deduplicated, and read only through d
     expect(db.prepare('SELECT id FROM notification_items WHERE tenant_id=? AND read_at IS NULL').all('two')).toEqual([{id:'c'}]);
   } finally { db.close(); }
 });
+
+test('alerts say which line was reached only when a line name is given', () => {
+  const p = pushPayload({ peer: '+15551234567', kind: 'message', body: 'hi', line: '+15550000002' }, 1, false, 'Work');
+  expect(p.aps.alert).toEqual({ title: 'New message', subtitle: 'To Work', body: '+15551234567: hi' });
+  expect(p).toHaveProperty('line', '+15550000002');
+  expect(pushPayload({ peer: '+15551234567', kind: 'message', body: 'hi' }, 1).aps.alert).not.toHaveProperty('subtitle');
+  const call = incomingCallPayload('+15551234567', 'Pat', 0, '+15550000002', '(555) 000-0002');
+  expect(call.aps.alert).toEqual({ title: 'Incoming call', subtitle: 'To (555) 000-0002', body: 'Pat' });
+  expect(call).toHaveProperty('line', '+15550000002');
+});
