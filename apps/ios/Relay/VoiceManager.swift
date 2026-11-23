@@ -70,9 +70,18 @@ final class VoiceManager: NSObject, ObservableObject {
             let voice: VoiceToken = try await api.request("/v1/voice/token", method: "POST", body: EmptyBody())
             selfTarget = voice.selfTarget
             Keychain.save(voice.token, key: "relay.voice.jwt")
-            let config = TxConfig(token: voice.token, pushDeviceToken: pushToken, pushEnvironment: pushEnvironment, enableMissedCallNotifications: true, reconnectClient: true, pushWhenActive: true)
+            let config = TxConfig(token: voice.token, pushDeviceToken: ringsHere ? pushToken : nil, pushEnvironment: pushEnvironment, enableMissedCallNotifications: true, reconnectClient: true, pushWhenActive: true)
             try client.connect(txConfig: config)
         } catch { status = .failed(error.localizedDescription); scheduleReconnect() }
+    }
+    /// Ring On for this device. When off, this device ignores incoming calls (other devices still ring)
+    /// and the iPhone stops receiving call pushes. Outgoing calls keep working.
+    private(set) var ringsHere = true
+    func setRingsHere(_ value: Bool) {
+        guard value != ringsHere else { return }
+        ringsHere = value
+        guard Self.usesCallKit else { return }
+        if value { Task { await reconnectForPushToken() } } else if status == .ready { client.disablePushNotifications() }
     }
     func disconnect() { reconnectTask?.cancel(); reconnectTask = nil; client.disconnect(); ringer.stop(); call = nil; hasCall = false; incoming = false; status = .offline; ownNumber = ""; api = nil }
     /// Outgoing calls show this line as caller ID.
@@ -196,7 +205,7 @@ extension VoiceManager: TxClientDelegate {
     nonisolated func onSocketConnected() {}
     nonisolated func onSocketDisconnected() { Task { @MainActor in if self.call == nil { self.status = .offline; self.scheduleReconnect() } } }
     nonisolated func onClientError(error: Error) { Task { @MainActor in self.status = .failed(error.localizedDescription); self.scheduleReconnect() } }
-    nonisolated func onClientReady() { Task { @MainActor in self.reconnectTask?.cancel(); self.reconnectTask = nil; self.reconnectDelay = 2; if !self.hasCall { self.status = .ready } } }
+    nonisolated func onClientReady() { Task { @MainActor in if Self.usesCallKit && !self.ringsHere { self.client.disablePushNotifications() }; self.reconnectTask?.cancel(); self.reconnectTask = nil; self.reconnectDelay = 2; if !self.hasCall { self.status = .ready } } }
     nonisolated func onPushDisabled(success: Bool, message: String) {}
     nonisolated func onSessionUpdated(sessionId: String) {}
     nonisolated func onCallStateUpdated(callState: CallState, callId: UUID) {
@@ -218,6 +227,8 @@ extension VoiceManager: TxClientDelegate {
     }
     nonisolated func onIncomingCall(call: Call) {
         Task { @MainActor in
+            // Ring On is off here: leave the call to the other devices. A call already shown by push still proceeds.
+            guard self.ringsHere || call.callInfo?.callId == self.currentCallID else { return }
             self.call = call; self.hasCall = true; self.incoming = true; self.remoteNumber = call.callInfo?.callerNumber ?? "Unknown"; self.status = .ringing
             // The server labels calls to a secondary line "To <line>" in the caller name.
             if let name = call.callInfo?.callerName, name.hasPrefix("To ") { self.incomingLineName = String(name.dropFirst(3)) }
@@ -226,7 +237,7 @@ extension VoiceManager: TxClientDelegate {
             self.reportIncomingCall(id: id, number: self.remoteNumber)
         }
     }
-    nonisolated func onRemoteCallEnded(callId: UUID, reason: CallTerminationReason?) { Task { @MainActor in self.reportedIncomingCalls.remove(callId); if Self.usesCallKit { self.provider.reportCall(with: callId, endedAt: Date(), reason: .remoteEnded) }; self.finish() } }
+    nonisolated func onRemoteCallEnded(callId: UUID, reason: CallTerminationReason?) { Task { @MainActor in guard self.currentCallID == nil || self.currentCallID == callId else { return }; self.reportedIncomingCalls.remove(callId); if Self.usesCallKit { self.provider.reportCall(with: callId, endedAt: Date(), reason: .remoteEnded) }; self.finish() } }
     nonisolated func onPushCall(call: Call) { onIncomingCall(call: call) }
 }
 
@@ -276,6 +287,12 @@ extension VoiceManager: PKPushRegistryDelegate {
                 if let key = item.key as? String { result[key] = item.value }
             }
             let metadata = (rawPayload["metadata"] as? [String: Any]) ?? payloadStrings
+            // iOS requires every VoIP push to show a call. If Ring On is off here, show it and end it at once.
+            if !self.ringsHere, let rawID = metadata["call_id"] as? String, let id = UUID(uuidString: rawID) {
+                let update = CXCallUpdate(); update.remoteHandle = CXHandle(type: .generic, value: "Relay")
+                self.provider.reportNewIncomingCall(with: id, update: update) { _ in Task { @MainActor in self.provider.reportCall(with: id, endedAt: Date(), reason: .answeredElsewhere) } }
+                return
+            }
             if let rawID = metadata["call_id"] as? String, let id = UUID(uuidString: rawID) {
                 self.currentCallID = id
                 let caller = (metadata["caller_name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (metadata["caller_number"] as? String) ?? "Unknown caller"

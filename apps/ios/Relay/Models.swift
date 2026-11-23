@@ -24,14 +24,29 @@ struct Conversation: Decodable, Identifiable, Hashable {
     let peer: String; let displayName: String; let body: String; let direction: String; let status: String; let occurredAt: Date; let kind: ActivityKind; var muted = false; var line: String? = nil
     enum CodingKeys: String, CodingKey { case peer, displayName = "display_name", body, direction, status, occurredAt = "occurred_at", kind, muted, line }
 }
+struct VoicemailItem: Decodable, Identifiable, Hashable {
+    let id: String; let peer: String; let line: String; let durationSeconds: Int?; let status: String; let occurredAt: Date; let displayName: String?
+    enum CodingKeys: String, CodingKey { case id, peer, line, status, durationSeconds = "duration_seconds", occurredAt = "occurred_at", displayName = "display_name" }
+}
 struct MediaItem: Decodable, Hashable { let key: String; let contentType: String; let size: Int? }
 struct ActivityItem: Decodable, Identifiable, Hashable {
     let id: String; let kind: ActivityKind; let direction: String; let body: String; let status: String; let occurredAt: Date; let deliveredAt: Date?; let media: [MediaItem]; let durationSeconds: Int?
     enum CodingKeys: String, CodingKey { case id, kind, direction, body, status, occurredAt = "occurred_at", deliveredAt = "delivered_at", media, durationSeconds = "duration_seconds" }
 }
 struct RelaySettings: Codable {
-    var receiveWeb: Bool; var receiveMobile: Bool; var voicemailEnabled: Bool; var hasVoicemailGreeting: Bool; var voicemailUpdatedAt: Date?
-    static let defaults = Self(receiveWeb: true, receiveMobile: true, voicemailEnabled: true, hasVoicemailGreeting: false, voicemailUpdatedAt: nil)
+    var receiveWeb: Bool; var receiveMobile: Bool; var receiveDesktop: Bool; var voicemailEnabled: Bool; var hasVoicemailGreeting: Bool; var voicemailUpdatedAt: Date?
+    static let defaults = Self(receiveWeb: true, receiveMobile: true, receiveDesktop: true, voicemailEnabled: true, hasVoicemailGreeting: false, voicemailUpdatedAt: nil)
+    /// Whether this device (the iPhone app or the Mac app) should ring.
+    var ringsOnThisDevice: Bool { ProcessInfo.processInfo.isMacCatalystApp ? receiveDesktop : receiveMobile }
+}
+extension RelaySettings {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        receiveWeb = try c.decode(Bool.self, forKey: .receiveWeb); receiveMobile = try c.decode(Bool.self, forKey: .receiveMobile)
+        receiveDesktop = try c.decodeIfPresent(Bool.self, forKey: .receiveDesktop) ?? true
+        voicemailEnabled = try c.decode(Bool.self, forKey: .voicemailEnabled); hasVoicemailGreeting = try c.decode(Bool.self, forKey: .hasVoicemailGreeting)
+        voicemailUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .voicemailUpdatedAt)
+    }
 }
 struct DataEnvelope<T: Decodable>: Decodable { let data: T }
 struct VoiceToken: Decodable { let token: String; let expiresIn: Int; let selfTarget: String }

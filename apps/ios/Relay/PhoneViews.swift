@@ -332,9 +332,10 @@ struct SettingsView: View {
                 LabeledContent { Text(voice.status.label).foregroundStyle(voice.status == .ready ? .green : .secondary) } label: { Label("Calling", systemImage: "antenna.radiowaves.left.and.right") }
             } header: { Text("Phone Numbers") } footer: { Text(session.lines.count > 1 ? "Switch numbers from the title at the top of Conversations. Each number has its own inbox." : "Add numbers you already own in Telnyx to use them in Relay.") }
             Section {
-                Toggle(isOn: binding(\.receiveMobile)) { Label(isMac ? "This Mac" : "This iPhone", systemImage: isMac ? "laptopcomputer" : "iphone") }
+                Toggle(isOn: binding(\.receiveMobile)) { Label(isMac ? "iPhone" : "This iPhone", systemImage: "iphone") }
+                Toggle(isOn: binding(\.receiveDesktop)) { Label(isMac ? "This Mac" : "Desktop App", systemImage: "laptopcomputer") }
                 Toggle(isOn: binding(\.receiveWeb)) { Label("Web Browsers", systemImage: "desktopcomputer") }
-            } header: { Text("Ring On") } footer: { Text(isMac ? "Relay rings on this Mac while the app is open." : "Push notifications wake Relay for incoming calls even when the app is not open.") }
+            } header: { Text("Ring On") } footer: { Text(isMac ? "Relay rings on this Mac while the app is open. Turn on Open at Login to keep it ready." : "Push notifications wake Relay for incoming calls even when the app is not open.") }
             Section {
                 Toggle(isOn: binding(\.voicemailEnabled)) { Label("Answer Missed Calls", systemImage: "recordingtape") }
                 HStack {

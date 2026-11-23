@@ -84,7 +84,7 @@ final class RelaySession: ObservableObject {
             async let preferences: DataEnvelope<RelaySettings> = RelayAPI.shared.request("/v1/settings")
             async let unread: UnreadState = RelayAPI.shared.request("/v1/unread?\(lineQuery)")
             let values = try await (list, preferences, unread)
-            conversations = values.0.data; settings = values.1.data; state = .connected; error = nil
+            conversations = values.0.data; settings = values.1.data; voice.setRingsHere(settings.ringsOnThisDevice); state = .connected; error = nil
             updateBadge(values.2)
             voice.useLine(currentLine?.e164 ?? "")
             await voice.connect(api: .shared, ownNumber: currentLine?.e164 ?? "")
@@ -191,7 +191,11 @@ final class RelaySession: ObservableObject {
         let _: EmptyResponse = try await RelayAPI.shared.request("/v1/conversations?peer=\(encoded)&\(lineQuery)", method: "DELETE")
         conversations.removeAll { $0.peer == normalized }
     }
-    func saveSettings(_ value: RelaySettings) async throws { let _: EmptyResponse = try await RelayAPI.shared.request("/v1/settings", method: "PUT", body: value); settings = value }
+    func loadVoicemails() async throws -> [VoicemailItem] {
+        let result: DataEnvelope<[VoicemailItem]> = try await RelayAPI.shared.request("/v1/voicemails?\(lineQuery)")
+        return result.data
+    }
+    func saveSettings(_ value: RelaySettings) async throws { let _: EmptyResponse = try await RelayAPI.shared.request("/v1/settings", method: "PUT", body: value); settings = value; voice.setRingsHere(value.ringsOnThisDevice) }
     func saveVoicemailGreeting(data: Data, contentType: String) async throws {
         try await RelayAPI.shared.upload("/v1/settings/voicemail-greeting", data: data, contentType: contentType)
         settings.hasVoicemailGreeting = true; settings.voicemailUpdatedAt = .now

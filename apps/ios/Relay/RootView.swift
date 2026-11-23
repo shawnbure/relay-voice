@@ -157,6 +157,10 @@ private struct MainTabs: View {
                 conversationPath = [.message(Conversation(peer: number, displayName: number, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message))]
                 selectedTab = 0
             } }.tabItem { Label("Keypad", systemImage: "circle.grid.3x3.fill") }.tag(1)
+            NavigationStack { VoicemailsView { peer in
+                let conversation = session.conversations.first { $0.peer == peer } ?? Conversation(peer: peer, displayName: peer, body: "", direction: "inbound", status: "received", occurredAt: .now, kind: .voicemail)
+                conversationPath = [.history(conversation)]; selectedTab = 0
+            } }.tabItem { Label("Voicemail", systemImage: "recordingtape") }.tag(3)
             NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
         }
         .adaptiveTabs()
@@ -479,6 +483,40 @@ private struct ActivityRow: View {
         if let deliveredAt = item.deliveredAt { return "Delivered \(Self.messageDateTimeFormatter.string(from: deliveredAt))" }
         if item.status.contains("failed") { return "Failed \(occurred)" }
         return "Sent \(occurred)"
+    }
+}
+
+private struct VoicemailsView: View {
+    @EnvironmentObject private var session: RelaySession
+    @EnvironmentObject private var voice: VoiceManager
+    let openConversation: (String) -> Void
+    @State private var items: [VoicemailItem] = []
+    @State private var loaded = false
+    @State private var contactNames: [String: String] = [:]
+    var body: some View {
+        List(items) { item in
+            HStack(spacing: 12) {
+                if item.status == "ready" { VoicemailButton(id: item.id).font(.title3).buttonStyle(.borderless).frame(width: 36) }
+                else { Image(systemName: "hourglass").foregroundStyle(.secondary).frame(width: 36).accessibilityLabel("Still processing") }
+                Button { openConversation(item.peer) } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(name(item)).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                        Text([item.occurredAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()), item.durationSeconds.map(formatDuration)].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityHint("Opens the conversation")
+                Button { voice.start(number: item.peer) } label: { Image(systemName: "phone.fill") }.buttonStyle(.borderless).disabled(!voice.canStartCall).accessibilityLabel("Call back")
+            }.padding(.vertical, 4)
+        }
+        .navigationTitle("Voicemail")
+        .overlay { if loaded && items.isEmpty { ContentUnavailableView("No Voicemail", systemImage: "recordingtape", description: Text("Messages callers leave on this number appear here.")) } }
+        .refreshable { await load() }
+        .task(id: session.currentLine?.e164) { await load() }
+        .task { contactNames = await loadLocalContactNames() }
+    }
+    private func name(_ item: VoicemailItem) -> String { item.displayName ?? contactNames[item.peer] ?? item.peer.displayPhone }
+    private func load() async {
+        do { items = try await session.loadVoicemails() } catch { session.error = error.localizedDescription }
+        loaded = true
     }
 }
 

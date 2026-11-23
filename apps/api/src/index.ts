@@ -541,6 +541,20 @@ app.get("/v1/messages/:id/media/:index", async (c) => {
   return mediaResponse(c.env.MEDIA, item.key);
 });
 
+app.get("/v1/voicemails", async (c) => {
+  const { tenantId } = c.get("principal");
+  const line = await lineFilter(c.env.DB, tenantId, c.req.query("line"));
+  if (line === null) return c.json({ error: "unknown line" }, 404);
+  const result = await c.env.DB.prepare(`
+    SELECT v.id, v.from_number peer, v.to_number line, v.duration_seconds, v.status, v.occurred_at,
+      (SELECT ct.display_name FROM contacts ct WHERE ct.tenant_id=v.tenant_id AND ct.phone_number=v.from_number LIMIT 1) display_name
+    FROM voicemails v
+    WHERE v.tenant_id=? AND (?='' OR v.to_number=?)
+    ORDER BY v.occurred_at DESC LIMIT 200
+  `).bind(tenantId, line, line).all();
+  return c.json({ data: result.results });
+});
+
 app.get("/v1/voicemails/:id/audio", async (c) => {
   const p = c.get("principal");
   const row = await c.env.DB.prepare("SELECT object_key FROM voicemails WHERE id=? AND tenant_id=? AND status='ready'").bind(c.req.param("id"), p.tenantId).first<{ object_key: string }>();
@@ -610,14 +624,15 @@ app.post("/v1/contacts", async (c) => {
 app.get("/v1/settings", async (c) => {
   const p = c.get("principal");
   const row = await c.env.DB.prepare(`
-    SELECT receive_web, receive_mobile, voicemail_enabled,
+    SELECT receive_web, receive_mobile, receive_desktop, voicemail_enabled,
       CASE WHEN voicemail_greeting IS NULL THEN 0 ELSE 1 END has_voicemail_greeting,
       voicemail_updated_at
     FROM call_preferences WHERE tenant_id=? AND user_id=?
-  `).bind(p.tenantId, p.userId).first<{ receive_web: number; receive_mobile: number; voicemail_enabled: number; has_voicemail_greeting: number; voicemail_updated_at: string | null }>();
+  `).bind(p.tenantId, p.userId).first<{ receive_web: number; receive_mobile: number; receive_desktop: number; voicemail_enabled: number; has_voicemail_greeting: number; voicemail_updated_at: string | null }>();
   return c.json({ data: {
     receiveWeb: Boolean(row?.receive_web ?? 1),
     receiveMobile: Boolean(row?.receive_mobile ?? 1),
+    receiveDesktop: Boolean(row?.receive_desktop ?? 1),
     voicemailEnabled: Boolean(row?.voicemail_enabled ?? 1),
     hasVoicemailGreeting: Boolean(row?.has_voicemail_greeting),
     voicemailUpdatedAt: row?.voicemail_updated_at ?? null,
@@ -626,17 +641,20 @@ app.get("/v1/settings", async (c) => {
 
 app.put("/v1/settings", async (c) => {
   const p = c.get("principal");
-  const body = await c.req.json<{ receiveWeb?: boolean; receiveMobile?: boolean; voicemailEnabled?: boolean }>();
-  if (typeof body.receiveWeb !== "boolean" || typeof body.receiveMobile !== "boolean" || typeof body.voicemailEnabled !== "boolean") return c.json({ error: "invalid call settings" }, 400);
+  const body = await c.req.json<{ receiveWeb?: boolean; receiveMobile?: boolean; receiveDesktop?: boolean; voicemailEnabled?: boolean }>();
+  if (typeof body.receiveWeb !== "boolean" || typeof body.receiveMobile !== "boolean" || typeof body.voicemailEnabled !== "boolean" || (body.receiveDesktop !== undefined && typeof body.receiveDesktop !== "boolean")) return c.json({ error: "invalid call settings" }, 400);
+  // Clients that predate the desktop switch omit it; keep its saved value.
+  const desktop = body.receiveDesktop === undefined ? null : body.receiveDesktop ? 1 : 0;
   await c.env.DB.prepare(`
-    INSERT INTO call_preferences (tenant_id, user_id, receive_web, receive_mobile, voicemail_enabled)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO call_preferences (tenant_id, user_id, receive_web, receive_mobile, receive_desktop, voicemail_enabled)
+    VALUES (?, ?, ?, ?, COALESCE(?, 1), ?)
     ON CONFLICT(tenant_id, user_id) DO UPDATE SET
       receive_web=excluded.receive_web,
       receive_mobile=excluded.receive_mobile,
+      receive_desktop=COALESCE(?, call_preferences.receive_desktop),
       voicemail_enabled=excluded.voicemail_enabled,
       updated_at=CURRENT_TIMESTAMP
-  `).bind(p.tenantId, p.userId, body.receiveWeb ? 1 : 0, body.receiveMobile ? 1 : 0, body.voicemailEnabled ? 1 : 0).run();
+  `).bind(p.tenantId, p.userId, body.receiveWeb ? 1 : 0, body.receiveMobile ? 1 : 0, desktop, body.voicemailEnabled ? 1 : 0, desktop).run();
   c.env.EVENTS.getByName(p.tenantId).broadcast(JSON.stringify({ type: "settings.updated", at: new Date().toISOString() }));
   return c.json({ saved: true });
 });
