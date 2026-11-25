@@ -9,8 +9,101 @@ import SwiftUI
 private let relayGreen = Color(red: 0.74, green: 0.96, blue: 0.29)
 private let relayInk = Color(red: 0.09, green: 0.13, blue: 0.10)
 
+/// Keypad tab. On a wide window (Mac, iPad) contacts are listed beside the keypad instead of behind a button.
+struct KeypadTab: View {
+    let onMessage: (String) -> Void
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    var body: some View {
+        if sizeClass == .regular {
+            NavigationStack {
+                HStack(spacing: 0) {
+                    ContactsListView(onMessage: onMessage).frame(width: 360)
+                    Divider()
+                    DialerView(onMessage: onMessage, showsContactButton: false)
+                }
+            }
+        } else {
+            NavigationStack { DialerView(onMessage: onMessage) }
+        }
+    }
+}
+
+struct ContactEntry: Identifiable, Hashable {
+    let id: String; let name: String; let number: String; let label: String
+}
+
+/// The device's contacts, one row per phone number, each with Call and Message buttons.
+struct ContactsListView: View {
+    let onMessage: (String) -> Void
+    @EnvironmentObject private var voice: VoiceManager
+    @State private var entries: [ContactEntry] = []
+    @State private var query = ""
+    @State private var state: LoadState = .loading
+    enum LoadState { case loading, loaded, denied }
+    private var filtered: [ContactEntry] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return entries }
+        let digits = q.phoneDigits
+        return entries.filter { $0.name.localizedCaseInsensitiveContains(q) || (!digits.isEmpty && $0.number.phoneDigits.contains(digits)) }
+    }
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search contacts", text: $query).autocorrectionDisabled().textInputAutocapitalization(.never)
+                if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search") }
+            }.padding(10).background(Color(.secondarySystemBackground)).clipShape(RoundedRectangle(cornerRadius: 10)).padding(12)
+            List(filtered) { entry in
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.name).font(.headline).lineLimit(1)
+                        Text([entry.label, entry.number.displayPhone].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    Button { onMessage(entry.number) } label: { Image(systemName: "message.fill").frame(width: 34, height: 34).background(relayGreen.opacity(0.35)).clipShape(Circle()) }
+                        .buttonStyle(.plain).accessibilityLabel("Message \(entry.name)")
+                    Button { voice.start(number: entry.number) } label: { Image(systemName: "phone.fill").frame(width: 34, height: 34).background(Color.green.opacity(0.35)).clipShape(Circle()) }
+                        .buttonStyle(.plain).disabled(!voice.canStartCall).accessibilityLabel("Call \(entry.name)")
+                }.padding(.vertical, 2)
+            }
+            .listStyle(.plain)
+            .overlay {
+                switch state {
+                case .loading: ProgressView()
+                case .denied: ContentUnavailableView("No Access to Contacts", systemImage: "person.crop.circle.badge.xmark", description: Text("Allow Relay to use your contacts in System Settings → Privacy & Security → Contacts."))
+                case .loaded: if filtered.isEmpty { ContentUnavailableView(query.isEmpty ? "No Contacts" : "No Results", systemImage: query.isEmpty ? "person.2" : "magnifyingglass") }
+                }
+            }
+        }
+        .navigationTitle("Contacts")
+        .task { await load() }
+    }
+    private func load() async {
+        let store = CNContactStore()
+        guard (try? await store.requestAccess(for: .contacts)) == true else { state = .denied; return }
+        entries = await Task.detached(priority: .userInitiated) { Self.fetch(store) }.value
+        state = .loaded
+    }
+    nonisolated private static func fetch(_ store: CNContactStore) -> [ContactEntry] {
+        let keys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactOrganizationNameKey, CNContactPhoneNumbersKey] as [CNKeyDescriptor]
+        let request = CNContactFetchRequest(keysToFetch: keys); request.sortOrder = .userDefault
+        var result: [ContactEntry] = []
+        try? store.enumerateContacts(with: request) { contact, _ in
+            let person = [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+            let name = person.isEmpty ? contact.organizationName : person
+            guard !name.isEmpty else { return }
+            for value in contact.phoneNumbers {
+                guard let number = value.value.stringValue.e164 else { continue }
+                let label = value.label.map { CNLabeledValue<CNPhoneNumber>.localizedString(forLabel: $0).capitalized } ?? ""
+                result.append(ContactEntry(id: "\(contact.identifier)|\(number)", name: name, number: number, label: label))
+            }
+        }
+        return result
+    }
+}
+
 struct DialerView: View {
     let onMessage: (String) -> Void
+    var showsContactButton = true
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
     @State private var number = ""
@@ -24,7 +117,7 @@ struct DialerView: View {
                 VStack(spacing: 5) {
                     HStack(spacing: 4) {
                         Button { showingContacts = true } label: { Image(systemName: "person.crop.circle").font(.title2).frame(width: 44, height: 48) }
-                            .accessibilityLabel("Choose contact").opacity(voice.isInCall ? 0 : 1).disabled(voice.isInCall)
+                            .accessibilityLabel("Choose contact").opacity(voice.isInCall || !showsContactButton ? 0 : 1).disabled(voice.isInCall || !showsContactButton)
                         if voice.isInCall {
                             Text(voice.remoteNumber.displayPhone).font(.system(size: 30, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.65).frame(maxWidth: .infinity)
                         } else {

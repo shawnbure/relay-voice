@@ -164,10 +164,11 @@ private struct MainTabs: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             ConversationsTab(path: $conversationPath).tabItem { Label("Conversations", image: "CommunicationTab") }.badge(session.unreadCount).tag(0)
-            NavigationStack { DialerView { number in
-                conversationPath = [.message(Conversation(peer: number, displayName: number, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message))]
+            KeypadTab { number in
+                let existing = session.conversations.first { $0.peer == number }
+                conversationPath = [.message(existing ?? Conversation(peer: number, displayName: number, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message))]
                 selectedTab = 0
-            } }.tabItem { Label("Keypad", systemImage: "circle.grid.3x3.fill") }.tag(1)
+            }.tabItem { Label("Keypad", systemImage: "circle.grid.3x3.fill") }.tag(1)
             NavigationStack { VoicemailsView { peer in
                 let conversation = session.conversations.first { $0.peer == peer } ?? Conversation(peer: peer, displayName: peer, body: "", direction: "inbound", status: "received", occurredAt: .now, kind: .voicemail)
                 conversationPath = [.history(conversation)]; selectedTab = 0
