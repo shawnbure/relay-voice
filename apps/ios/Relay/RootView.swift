@@ -101,33 +101,39 @@ private struct SignInView: View {
 /// Face ID / Touch ID gate. Locks on launch and after 5 minutes in the background, when turned on in Settings.
 @MainActor final class AppLock: ObservableObject {
     static let enabledKey = "relay.requireBiometrics"
+    private static let lastActiveKey = "relay.lastActiveAt"
+    /// Relay only asks again after being away this long, including when iOS relaunches it.
+    private static let grace: TimeInterval = 15 * 60
     @Published private(set) var isLocked: Bool
     @Published var isEnabled: Bool { didSet { UserDefaults.standard.set(isEnabled, forKey: Self.enabledKey); if !isEnabled { isLocked = false } } }
-    private var backgroundedAt: Date?
     private var authenticating = false
     init() {
         let enabled = UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true
         // Only lock a signed-in app; the sign-in screen already asks for the password.
-        isEnabled = enabled; isLocked = enabled && Keychain.read("relay.mobile.token") != nil
+        isEnabled = enabled; isLocked = enabled && Keychain.read("relay.mobile.token") != nil && Self.awayTooLong
     }
-    func markUnlocked() { isLocked = false; backgroundedAt = nil }
+    private static var awayTooLong: Bool {
+        guard let last = UserDefaults.standard.object(forKey: lastActiveKey) as? Date else { return true }
+        return Date().timeIntervalSince(last) > grace
+    }
+    private static func noteActive() { UserDefaults.standard.set(Date(), forKey: lastActiveKey) }
+    func markUnlocked() { isLocked = false; Self.noteActive() }
     var biometryName: String {
         let context = LAContext(); _ = context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
         switch context.biometryType { case .faceID: return "Face ID"; case .touchID: return "Touch ID"; case .opticID: return "Optic ID"; default: return "Passcode" }
     }
-    func didEnterBackground() { backgroundedAt = .now }
+    func didEnterBackground() { if !isLocked { Self.noteActive() } }
     func didBecomeActive() async {
-        guard Keychain.read("relay.mobile.token") != nil else { isLocked = false; backgroundedAt = nil; return }
-        if isEnabled, let backgroundedAt, Date().timeIntervalSince(backgroundedAt) > 300 { isLocked = true }
-        backgroundedAt = nil
-        if isLocked { await unlock() }
+        guard Keychain.read("relay.mobile.token") != nil else { isLocked = false; return }
+        if isEnabled, !isLocked, Self.awayTooLong { isLocked = true }
+        if isLocked { await unlock() } else { Self.noteActive() }
     }
     func unlock() async {
         guard isLocked, !authenticating else { return }
         authenticating = true; defer { authenticating = false }
         let context = LAContext()
-        // Falls back to the device passcode (or Mac password) when biometrics are unavailable.
-        if (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock Relay")) == true { isLocked = false }
+        // Face ID first; the passcode (or Mac password) only if Face ID fails or is unavailable.
+        if (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock Relay")) == true { markUnlocked() }
     }
 }
 

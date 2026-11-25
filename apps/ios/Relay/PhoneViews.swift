@@ -345,7 +345,7 @@ struct SettingsView: View {
                 }
                 Button { Task { await recordGreeting() } } label: { Label(greetingRecorder.isRecording ? "Stop and Save" : "Record New Greeting", systemImage: greetingRecorder.isRecording ? "stop.circle.fill" : "mic.circle.fill").foregroundStyle(greetingRecorder.isRecording ? .red : relayInk) }
             } header: { Text("Voicemail") } footer: { Text("Tap again to stop and save your greeting.") }
-            Section("Account") {
+            Section {
                 LabeledContent { Text(session.identity?.user.email ?? "").foregroundStyle(.secondary) } label: { Label("Signed In As", systemImage: "person.crop.circle") }
                 Toggle(isOn: $lock.isEnabled) { Label("Require \(lock.biometryName)", systemImage: "faceid") }
                 Button { showingPassword = true } label: { Label("Change Password", systemImage: "key.fill") }
@@ -355,7 +355,7 @@ struct SettingsView: View {
                     })) { Label("Open at Login", systemImage: "power") }
                 }
                 Button(role: .destructive) { confirmingSignOut = true } label: { Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") }
-            }
+            } header: { Text("Account") } footer: { if lock.isEnabled { Text("Relay asks again only after you have been away for 15 minutes.") } }
             Section { LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") }
         }.navigationTitle("Settings").overlay { if saving { ProgressView("Saving…").padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 12)) } }
         .confirmationDialog("Sign Out of Relay?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
