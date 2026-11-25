@@ -169,10 +169,9 @@ private struct MainTabs: View {
                 conversationPath = [.message(existing ?? Conversation(peer: number, displayName: number, body: "", direction: "outbound", status: "new", occurredAt: .now, kind: .message))]
                 selectedTab = 0
             }.tabItem { Label("Keypad", systemImage: "circle.grid.3x3.fill") }.tag(1)
-            NavigationStack { VoicemailsView { peer in
-                let conversation = session.conversations.first { $0.peer == peer } ?? Conversation(peer: peer, displayName: peer, body: "", direction: "inbound", status: "received", occurredAt: .now, kind: .voicemail)
-                conversationPath = [.history(conversation)]; selectedTab = 0
-            } }.tabItem { Label("Voicemail", systemImage: "recordingtape") }.tag(3)
+            VoicemailTab { peer in
+                conversationPath = [.history(conversation(for: peer))]; selectedTab = 0
+            }.tabItem { Label("Voicemail", systemImage: "recordingtape") }.tag(3)
             NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
         }
         .adaptiveTabs()
@@ -184,6 +183,39 @@ private struct MainTabs: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { if voice.isInCall { CallBar().padding(.horizontal, 10).padding(.vertical, 6) } }
         .overlay { if voice.incoming { IncomingCallView() } }
+    }
+    private func conversation(for peer: String) -> Conversation {
+        session.conversations.first { $0.peer == peer } ?? Conversation(peer: peer, displayName: peer, body: "", direction: "inbound", status: "received", occurredAt: .now, kind: .voicemail)
+    }
+}
+
+/// Voicemail tab. On a wide window the list stays on the left and the caller's full history opens on the right;
+/// on iPhone, tapping a voicemail jumps to that conversation.
+private struct VoicemailTab: View {
+    let openConversation: (String) -> Void
+    @EnvironmentObject private var session: RelaySession
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var selectedPeer: String?
+    var body: some View {
+        if sizeClass == .regular {
+            NavigationSplitView {
+                VoicemailsView(selectedPeer: selectedPeer) { selectedPeer = $0 }
+                    .navigationSplitViewColumnWidth(min: 300, ideal: 380, max: 520)
+            } detail: {
+                NavigationStack {
+                    if let peer = selectedPeer {
+                        let conversation = session.conversations.first { $0.peer == peer } ?? Conversation(peer: peer, displayName: peer, body: "", direction: "inbound", status: "received", occurredAt: .now, kind: .voicemail)
+                        ThreadView(conversation: conversation, startComposing: false).id(peer)
+                    } else {
+                        ContentUnavailableView("No Voicemail Selected", systemImage: "recordingtape", description: Text("Choose a voicemail on the left to see the caller's history."))
+                    }
+                }
+            }
+            .navigationSplitViewStyle(.balanced)
+            .onChange(of: session.currentLine?.e164) { selectedPeer = nil }
+        } else {
+            NavigationStack { VoicemailsView(openConversation: openConversation) }
+        }
     }
 }
 
@@ -529,6 +561,8 @@ private struct ActivityRow: View {
 private struct VoicemailsView: View {
     @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
+    /// Set in the split layout, where the open caller stays highlighted.
+    var selectedPeer: String? = nil
     let openConversation: (String) -> Void
     @State private var items: [VoicemailItem] = []
     @State private var loaded = false
@@ -545,7 +579,7 @@ private struct VoicemailsView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityHint("Opens the conversation")
                 Button { voice.start(number: item.peer) } label: { Image(systemName: "phone.fill") }.buttonStyle(.borderless).disabled(!voice.canStartCall).accessibilityLabel("Call back")
-            }.padding(.vertical, 4)
+            }.padding(.vertical, 4).listRowBackground(selectedPeer == item.peer ? relayGreen.opacity(0.22) : Color.clear)
         }
         .navigationTitle("Voicemail")
         .overlay { if loaded && items.isEmpty { ContentUnavailableView("No Voicemail", systemImage: "recordingtape", description: Text("Messages callers leave on this number appear here.")) } }
