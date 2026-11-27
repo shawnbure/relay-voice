@@ -405,10 +405,13 @@ struct SettingsView: View {
     @State private var showingPassword = false
     @State private var openAtLogin = LoginItem.isEnabled
     @StateObject private var greetingRecorder = GreetingRecorder()
+    /// In the split layout each pane shows one group; nil shows everything (iPhone).
+    var pane: SettingsPane? = nil
     private var isMac: Bool { ProcessInfo.processInfo.isMacCatalystApp }
+    private func show(_ group: SettingsPane) -> Bool { pane == nil || pane == group }
     var body: some View {
         Form {
-            Section {
+            if show(.numbers) { Section {
                 ForEach(session.lines) { line in
                     Button { if session.identity?.user.role != "member" { editingLine = line } } label: {
                         HStack {
@@ -423,13 +426,13 @@ struct SettingsView: View {
                 }
                 if session.identity?.user.role == "owner" { Button { showingAddLine = true } label: { Label("Add Number", systemImage: "plus.circle.fill") } }
                 LabeledContent { Text(voice.status.label).foregroundStyle(voice.status == .ready ? .green : .secondary) } label: { Label("Calling", systemImage: "antenna.radiowaves.left.and.right") }
-            } header: { Text("Phone Numbers") } footer: { Text(session.lines.count > 1 ? "Switch numbers from the title at the top of Conversations. Each number has its own inbox." : "Add numbers you already own in Telnyx to use them in Relay.") }
-            Section {
+            } header: { Text("Phone Numbers") } footer: { Text(session.lines.count > 1 ? "Switch numbers from the title at the top of Conversations. Each number has its own inbox." : "Add numbers you already own in Telnyx to use them in Relay.") } }
+            if show(.ringOn) { Section {
                 Toggle(isOn: binding(\.receiveMobile)) { Label(isMac ? "iPhone" : "This iPhone", systemImage: "iphone") }
                 Toggle(isOn: binding(\.receiveDesktop)) { Label(isMac ? "This Mac" : "Desktop App", systemImage: "laptopcomputer") }
                 Toggle(isOn: binding(\.receiveWeb)) { Label("Web Browsers", systemImage: "desktopcomputer") }
-            } header: { Text("Ring On") } footer: { Text(isMac ? "Relay rings on this Mac while the app is open. Turn on Open at Login to keep it ready." : "Push notifications wake Relay for incoming calls even when the app is not open.") }
-            Section {
+            } header: { Text("Ring On") } footer: { Text(isMac ? "Relay rings on this Mac while the app is open. Turn on Open at Login to keep it ready." : "Push notifications wake Relay for incoming calls even when the app is not open.") } }
+            if show(.voicemail) { Section {
                 Toggle(isOn: binding(\.voicemailEnabled)) { Label("Answer Missed Calls", systemImage: "recordingtape") }
                 HStack {
                     Label(session.settings.hasVoicemailGreeting ? "Personal Greeting" : "Default Greeting", systemImage: "waveform")
@@ -437,8 +440,8 @@ struct SettingsView: View {
                     if session.settings.hasVoicemailGreeting { Button { Task { _ = await AudioPlayback.shared.toggle(path: "/v1/settings/voicemail-greeting") } } label: { Image(systemName: "play.circle.fill").font(.title2) }.accessibilityLabel("Play greeting") }
                 }
                 Button { Task { await recordGreeting() } } label: { Label(greetingRecorder.isRecording ? "Stop and Save" : "Record New Greeting", systemImage: greetingRecorder.isRecording ? "stop.circle.fill" : "mic.circle.fill").foregroundStyle(greetingRecorder.isRecording ? .red : relayInk) }
-            } header: { Text("Voicemail") } footer: { Text("Tap again to stop and save your greeting.") }
-            Section {
+            } header: { Text("Voicemail") } footer: { Text("Tap again to stop and save your greeting.") } }
+            if show(.account) { Section {
                 LabeledContent { Text(session.identity?.user.email ?? "").foregroundStyle(.secondary) } label: { Label("Signed In As", systemImage: "person.crop.circle") }
                 Toggle(isOn: $lock.isEnabled) { Label("Require \(lock.biometryName)", systemImage: "faceid") }
                 Button { showingPassword = true } label: { Label("Change Password", systemImage: "key.fill") }
@@ -449,8 +452,8 @@ struct SettingsView: View {
                 }
                 Button(role: .destructive) { confirmingSignOut = true } label: { Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") }
             } header: { Text("Account") } footer: { if lock.isEnabled { Text("Relay asks again only after you have been away for 15 minutes.") } }
-            Section { LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") }
-        }.navigationTitle("Settings").overlay { if saving { ProgressView("Saving…").padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 12)) } }
+            Section { LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") } }
+        }.navigationTitle(pane?.title ?? "Settings").overlay { if saving { ProgressView("Saving…").padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 12)) } }
         .confirmationDialog("Sign Out of Relay?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
             Button("Sign Out", role: .destructive) { Task { await session.signOut() } }
         } message: { Text("This device stops ringing and getting notifications until you sign in again.") }
@@ -463,6 +466,35 @@ struct SettingsView: View {
         do {
             if let recording = try await greetingRecorder.toggle() { saving = true; try await session.saveVoicemailGreeting(data: recording, contentType: "audio/mp4"); saving = false }
         } catch { saving = false; session.error = error.localizedDescription }
+    }
+}
+
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case numbers, ringOn, voicemail, account
+    var id: String { rawValue }
+    var title: String { switch self { case .numbers: "Phone Numbers"; case .ringOn: "Ring On"; case .voicemail: "Voicemail"; case .account: "Account" } }
+    var icon: String { switch self { case .numbers: "phone"; case .ringOn: "bell.badge"; case .voicemail: "recordingtape"; case .account: "person.crop.circle" } }
+}
+
+/// Settings tab. On a wide window the groups are listed on the left and the chosen group fills the right.
+struct SettingsTab: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var selection: SettingsPane? = .numbers
+    var body: some View {
+        if sizeClass == .regular {
+            NavigationSplitView {
+                List(SettingsPane.allCases, selection: $selection) { pane in
+                    Label(pane.title, systemImage: pane.icon).tag(pane)
+                }
+                .navigationTitle("Settings")
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+            } detail: {
+                NavigationStack { SettingsView(pane: selection ?? .numbers).id(selection) }
+            }
+            .navigationSplitViewStyle(.balanced)
+        } else {
+            NavigationStack { SettingsView() }
+        }
     }
 }
 

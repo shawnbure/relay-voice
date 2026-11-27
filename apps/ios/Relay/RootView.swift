@@ -172,7 +172,7 @@ private struct MainTabs: View {
             VoicemailTab { peer in
                 conversationPath = [.history(conversation(for: peer))]; selectedTab = 0
             }.tabItem { Label("Voicemail", systemImage: "recordingtape") }.tag(3)
-            NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
+            SettingsTab().tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
         }
         .adaptiveTabs()
         .toolbarBackground(.visible, for: .tabBar)
