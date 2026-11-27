@@ -1,6 +1,9 @@
 # Relay Voice
 
-Relay is a self-hosted communications inbox and softphone built with Telnyx, Cloudflare Workers, React, and SwiftUI. It keeps SMS, MMS, calls, and voicemail in one timeline per phone number and provides both a responsive web client and a native iPhone client.
+Relay is a self-hosted communications inbox and softphone built with Telnyx, Cloudflare Workers, React, and SwiftUI. It keeps SMS, MMS, calls, and voicemail in one timeline per phone number and provides a responsive web client plus a native app for iPhone, iPad, and Mac.
+
+> [!NOTE]
+> **What's new:** a Mac app, email/password and passkey sign-in in the apps, multiple phone numbers with separate inboxes, a Voicemail tab, per-device Ring On, and reliable answering of push-woken iPhone calls. See [CHANGELOG.md](CHANGELOG.md) for the full notes, API changes, migrations, and operator steps.
 
 Built on Cloudflare Workers, Durable Objects, D1, and R2 by [workrr.ai](https://workrr.ai).
 
@@ -11,8 +14,12 @@ Built on Cloudflare Workers, Durable Objects, D1, and R2 by [workrr.ai](https://
 
 - Unified call, SMS, MMS, and voicemail history
 - Browser calling through the Telnyx WebRTC SDK
-- Native iOS calling with SwiftUI, CallKit, PushKit, and DTMF
-- Password authentication, optional passkey fallback, and revocable iOS device credentials
+- Native SwiftUI app for iPhone, iPad, and Mac (Mac Catalyst), with CallKit, PushKit, and DTMF on iPhone
+- Multiple phone numbers per workspace, each with its own inbox, call history, and voicemail
+- Voicemail tab with playback and call back, plus a recordable personal greeting
+- Per-device Ring On (iPhone, desktop app, web) with simultaneous ringing
+- Split-view layouts on Mac and iPad: conversations, contacts beside the keypad, voicemail, and settings
+- Password and passkey sign-in on web and in the apps, revocable device credentials, and an optional Face ID / Touch ID app lock
 - Real-time updates over Cloudflare Durable Object WebSockets
 - APNs alerts for incoming SMS/MMS, missed calls, and ready voicemail, with shared unread badges
 - Cross-client conversation archive and full-history search
@@ -23,7 +30,7 @@ Built on Cloudflare Workers, Durable Objects, D1, and R2 by [workrr.ai](https://
 ```text
 apps/api    Cloudflare Worker API, Telnyx webhooks, D1 migrations
 apps/web    React/Vite progressive web application
-apps/ios    Native SwiftUI iPhone application
+apps/ios    Native SwiftUI app for iPhone, iPad, and Mac
 docs        Architecture and design notes
 ```
 
@@ -147,14 +154,16 @@ Content-Type: application/json
 {"e164":"+15551234567"}
 ```
 
-The endpoint accepts only one unassigned E.164 number per workspace and records the change in the audit log.
+Repeat it for each additional number; an optional `"label"` (for example `"Work"`) names the line in the apps. Owners can also do this from the app under Settings → Phone Numbers → Add Number. Each attach is recorded in the audit log.
+
+On the Telnyx Credential Connection that holds the WebRTC credential, turn on **Simultaneous Ringing** (Inbound tab) so every signed-in device rings, and attach your iOS VoIP push credential (WebRTC tab) so iPhones ring while Relay is closed.
 
 Telnyx requirements differ by region and number type. Follow the current [Telnyx documentation](https://developers.telnyx.com/) before carrying production traffic.
 
-## Run the iOS client
+## Run the iPhone, iPad, and Mac app
 
 1. Replace `com.example.relay` in `apps/ios/project.yml` with your own bundle identifier.
-2. Replace the example `RELAY_API_BASE_URL` with your deployed HTTPS origin.
+2. Replace the example `RELAY_API_BASE_URL` with your deployed HTTPS origin, and `RELAY_PASSKEY_DOMAIN` with its hostname.
 3. Generate and open the project:
 
    ```sh
@@ -163,10 +172,10 @@ Telnyx requirements differ by region and number type. Follow the current [Telnyx
    open Relay.xcodeproj
    ```
 
-4. Select your Apple development team, enable automatic signing, connect an iPhone, and run.
-5. Create a mobile token with authenticated `POST /v1/mobile/token`, then add it to the app Keychain through your own secure onboarding flow.
+4. Select your Apple development team, enable automatic signing, connect an iPhone, and run. For the Mac, choose the **My Mac (Mac Catalyst)** destination.
+5. Sign in with your Relay email and password, or with **Sign In With Passkey**. Passkeys need the Associated Domains capability on your App ID and the Worker's `APNS_TEAM_ID` / `APNS_BUNDLE_ID` set, which publish `/.well-known/apple-app-site-association`.
 
-The current iOS client is owner-oriented and does not yet provide a public account-linking screen. Production background ringing requires the Push Notifications capability, VoIP background mode, an APNs VoIP credential, and matching Telnyx push configuration. CallKit's incoming-call interface is required for PushKit VoIP wakeups.
+See [apps/ios/README.md](apps/ios/README.md) for app details. Production background ringing requires the Push Notifications capability, VoIP background mode, an APNs VoIP credential, and matching Telnyx push configuration. CallKit's incoming-call interface is required for PushKit VoIP wakeups.
 
 ## Verify changes
 
