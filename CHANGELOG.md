@@ -27,7 +27,7 @@ This release turns the native client into a full app for iPhone, iPad, and Mac. 
 ### Multiple phone numbers ("lines")
 
 - Owners add numbers that are already in the Telnyx account from **Settings → Phone Numbers → Add Number**, with an optional label such as "Work". Labels can be renamed later. Relay does not buy numbers.
-- **All Numbers: one combined inbox (the default).** Conversations and voicemail from every number appear in a single list. Each row has a small icon that shows which number it is on.
+- **All Numbers: one combined inbox (the default).** Conversations and voicemail from every number appear in a single list. The round icon at the left of each conversation shows its number's icon and color (voicemail rows show a small badge).
 - **An icon for each number.** In Settings → Phone Numbers, tap a number to choose its icon from twelve colored symbols (Work, Home, and so on), and to change its label. A number without a chosen icon shows a numbered circle.
 - **Switch to a single number at any time.** Tap the title at the top of Conversations and choose **All Numbers** or one number. With one number chosen, conversations, search, unread dots, the archive, call history, and voicemail follow that number. The app badge still counts every number.
 - **Replies come from the right number.** Messages and call-backs from a conversation or voicemail use that conversation's number, even in All Numbers. The Keypad's **From** menu sets the **Default** number used as caller ID for new calls and messages, without leaving All Numbers.

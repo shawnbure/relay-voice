@@ -264,11 +264,11 @@ private struct ConversationsView: View {
             HStack(spacing: 12) {
                 Circle().fill(session.isUnread(conversation) ? Color.blue : Color.clear).frame(width: 10, height: 10).accessibilityHidden(!session.isUnread(conversation)).accessibilityLabel("Unread")
                 Button { if conversation.kind == .message { path = [.message(named(conversation))] } else { voice.start(number: conversation.peer, from: conversation.line) } } label: {
-                    Circle().fill(relayGreen.opacity(0.48)).frame(width: 48, height: 48).overlay(Image(systemName: conversation.kind == .message ? "message.fill" : "phone.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(relayInk))
+                    ConversationAvatar(conversation: conversation)
                 }.buttonStyle(.plain).disabled(conversation.kind != .message && !voice.canStartCall).accessibilityLabel(conversation.kind == .message ? "Message \(conversation.peer.displayPhone)" : "Call \(conversation.peer.displayPhone)")
                 Button { path = [.history(named(conversation))] } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) { if session.showingAllLines { LineBadge(e164: conversation.line) }; Text(displayName(for: conversation)).font(.headline.weight(session.isUnread(conversation) ? .heavy : .semibold)).foregroundStyle(.primary).lineLimit(1); if conversation.muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Notifications silenced") }; Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                        HStack(spacing: 6) { Text(displayName(for: conversation)).font(.headline.weight(session.isUnread(conversation) ? .heavy : .semibold)).foregroundStyle(.primary).lineLimit(1); if conversation.muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Notifications silenced") }; Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         Label(conversation.body.isEmpty ? conversation.kind.summary : conversation.body, systemImage: conversation.kind.icon).font(.subheadline.weight(session.isUnread(conversation) ? .semibold : .regular)).foregroundStyle(session.isUnread(conversation) ? Color.primary : Color.secondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityHint("Opens complete communication history")
@@ -341,6 +341,22 @@ private struct ConversationsView: View {
 }
 
 /// The inbox title: the current line's name. With several lines it is a menu that switches between them.
+/// The round icon at the left of a conversation. In All Numbers it shows the conversation's number
+/// (its chosen icon and color); otherwise a message or phone glyph. Tapping it messages or calls.
+private struct ConversationAvatar: View {
+    @EnvironmentObject private var session: RelaySession
+    let conversation: Conversation
+    var body: some View {
+        if session.showingAllLines, let line = session.line(conversation.line) {
+            let index = (session.lines.firstIndex(of: line) ?? 0) + 1
+            Circle().fill((line.icon.map(LineIcon.color) ?? .gray).opacity(0.85)).frame(width: 48, height: 48)
+                .overlay(Image(systemName: line.icon ?? (index <= 50 ? "\(index).circle" : "phone")).font(.system(size: 20, weight: .semibold)).foregroundStyle(.white))
+        } else {
+            Circle().fill(relayGreen.opacity(0.48)).frame(width: 48, height: 48).overlay(Image(systemName: conversation.kind == .message ? "message.fill" : "phone.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(relayInk))
+        }
+    }
+}
+
 private struct LineTitle: View {
     @EnvironmentObject private var session: RelaySession
     var body: some View {
