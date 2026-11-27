@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { expect, test } from 'vitest';
-import { apnsJWT, callCollapseId, incomingCallPayload, pushPayload } from '../src/notifications';
+import { describe, expect, it, test } from 'vitest';
+import { apnsJWT, callCollapseId, incomingCallPayload, pushPayload, verificationCode } from '../src/notifications';
 
 test('APNs JWT uses ES256 with a valid raw signature and no private key in its claims', async () => {
   const pair = await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
@@ -51,4 +51,22 @@ test('alerts say which line was reached only when a line name is given', () => {
   const call = incomingCallPayload('+15551234567', 'Pat', 0, '+15550000002', '(555) 000-0002');
   expect(call.aps.alert).toEqual({ title: 'Incoming call', subtitle: 'To (555) 000-0002', body: 'Pat' });
   expect(call).toHaveProperty('line', '+15550000002');
+});
+
+describe('verification codes', () => {
+  it('finds sign-in codes and adds a Copy Code category', () => {
+    expect(verificationCode("Your Panera Bread verification code is 342583.  Please enter this code")).toBe('342583');
+    expect(verificationCode("Here's your Netflix verification code 042532 to verify your phone number.")).toBe('042532');
+    expect(verificationCode("Apple Account code: 123-456. Don't share it.")).toBe('123456');
+    expect(verificationCode("G-834920 is your Google verification code.")).toBe('834920');
+    const payload = pushPayload({ peer: '71907', kind: 'message', body: 'Your login code is 9081' }, 1) as { aps: { category?: string }; code?: string };
+    expect(payload.aps.category).toBe('VERIFICATION_CODE');
+    expect(payload.code).toBe('9081');
+  });
+  it('ignores ordinary numbers', () => {
+    expect(verificationCode("Your order 48213 has shipped")).toBeNull();
+    expect(verificationCode("6500 will work and we can have this resolved")).toBeNull();
+    expect(verificationCode("Your code total is $1250.00")).toBeNull();
+    expect((pushPayload({ peer: '+15551234567', kind: 'message', body: 'see you at 1230' }, 1) as { aps: { category?: string } }).aps.category).toBeUndefined();
+  });
 });

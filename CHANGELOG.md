@@ -56,6 +56,12 @@ This release turns the native client into a full app for iPhone, iPad, and Mac. 
 - **Ringing without CallKit.** Macs have no CallKit call screen and no VoIP push wakeups, so the Mac app plays its own ring and shows its own incoming-call screen. It manages the audio itself.
 - **Open at Login** (Settings → Account) starts Relay when you log in. The app also asks macOS not to nap it, so it stays connected and can ring.
 
+### Notifications
+
+- **The Mac app now shows banners for calls and messages.** Relay used to hide the incoming-call banner whenever a call was ringing, and hide message banners for the open conversation, even when its window was behind other apps. It now hides them only when the call screen or that conversation is actually in front.
+- **Copy Code for sign-in texts.** When a text looks like a one-time code ("Your verification code is 342583"), the banner is time-sensitive and has a **Copy Code** button. Clicking the banner also copies the code. Order numbers and amounts are ignored.
+- **Notification status in Settings.** Settings → Ring On shows whether notifications are on. If they are off, **Turn On Notifications** asks for permission or opens the system notification settings.
+
 ### Small improvements
 
 - Server error messages shown in the app read as normal sentences.

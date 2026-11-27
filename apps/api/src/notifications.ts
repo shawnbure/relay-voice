@@ -29,11 +29,20 @@ export async function apnsJWT(env: Pick<Env, 'APNS_PRIVATE_KEY' | 'APNS_TEAM_ID'
   return `${input}.${base64url(new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, enc.encode(input))))}`;
 }
 /** `lineName` is set only when the workspace has several numbers, so the alert says which one was reached. */
+/** The one-time code in a sign-in text ("Your code is 123456"), or null. Needs a code-like word so order numbers are ignored. */
+export function verificationCode(body: string): string | null {
+  if (!/\b(code|passcode|verification|verify|otp|one[- ]time|pin|2fa|login|sign[- ]in)\b/i.test(body)) return null;
+  const match = /(?<![\d$.,])(\d{3}[- ]\d{3}|\d{4,8})(?![\d.,]\d)/.exec(body);
+  return match ? match[1].replace(/[- ]/g, '') : null;
+}
 export function pushPayload(item: { peer: string; kind: string; body: string; line?: string | null } | null, badge: number, muted = false, lineName?: string | null) {
   const title = item?.kind === 'voicemail' ? 'New voicemail' : item?.kind === 'missed_call' ? 'Missed call' : 'New message';
   const urgency = item?.kind === 'missed_call' ? { 'interruption-level': 'time-sensitive' } : {};
   const subtitle = lineName ? { subtitle: `To ${lineName}` } : {};
-  return { aps: { badge, ...(item && !muted ? { alert: { title, ...subtitle, body: `${item.peer}: ${item.body}` }, sound: 'default', 'thread-id': item.peer, ...urgency } : item && muted ? { 'content-available': 1 } : {}) }, ...(item ? { peer: item.peer, kind: item.kind, ...(item.line ? { line: item.line } : {}) } : {}) };
+  // Sign-in codes get a "Copy Code" button on the notification.
+  const code = item?.kind === 'message' ? verificationCode(item.body) : null;
+  const codeAps = code ? { category: 'VERIFICATION_CODE', 'interruption-level': 'time-sensitive' } : {};
+  return { aps: { badge, ...(item && !muted ? { alert: { title, ...subtitle, body: `${item.peer}: ${item.body}` }, sound: 'default', 'thread-id': item.peer, ...urgency, ...codeAps } : item && muted ? { 'content-available': 1 } : {}) }, ...(item ? { peer: item.peer, kind: item.kind, ...(item.line ? { line: item.line } : {}), ...(code ? { code } : {}) } : {}) };
 }
 export function incomingCallPayload(peer: string, caller: string, badge: number, line?: string | null, lineName?: string | null) {
   return { aps: { badge, alert: { title: 'Incoming call', ...(lineName ? { subtitle: `To ${lineName}` } : {}), body: caller }, sound: 'default', 'thread-id': peer, 'interruption-level': 'time-sensitive' }, peer, kind: 'incoming_call', ...(line ? { line } : {}) };

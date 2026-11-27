@@ -5,6 +5,7 @@ import ContactsUI
 import ServiceManagement
 #endif
 import SwiftUI
+import UserNotifications
 
 private let relayGreen = Color(red: 0.74, green: 0.96, blue: 0.29)
 private let relayInk = Color(red: 0.09, green: 0.13, blue: 0.10)
@@ -404,6 +405,8 @@ struct SettingsView: View {
     @State private var confirmingSignOut = false
     @State private var showingPassword = false
     @State private var openAtLogin = LoginItem.isEnabled
+    @State private var notificationStatus: UNAuthorizationStatus?
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var greetingRecorder = GreetingRecorder()
     /// In the split layout each pane shows one group; nil shows everything (iPhone).
     var pane: SettingsPane? = nil
@@ -427,6 +430,19 @@ struct SettingsView: View {
                 if session.identity?.user.role == "owner" { Button { showingAddLine = true } label: { Label("Add Number", systemImage: "plus.circle.fill") } }
                 LabeledContent { Text(voice.status.label).foregroundStyle(voice.status == .ready ? .green : .secondary) } label: { Label("Calling", systemImage: "antenna.radiowaves.left.and.right") }
             } header: { Text("Phone Numbers") } footer: { Text(session.lines.count > 1 ? "Switch numbers from the title at the top of Conversations. Each number has its own inbox." : "Add numbers you already own in Telnyx to use them in Relay.") } }
+            if show(.ringOn) { Section {
+                LabeledContent {
+                    switch notificationStatus {
+                    case .authorized, .provisional, .ephemeral: Text("On").foregroundStyle(.green)
+                    case .denied: Text("Off").foregroundStyle(.red)
+                    case .notDetermined: Text("Not Set Up").foregroundStyle(.orange)
+                    default: Text("Checking…").foregroundStyle(.secondary)
+                    }
+                } label: { Label("Notifications", systemImage: "bell") }
+                if notificationStatus == .denied || notificationStatus == .notDetermined {
+                    Button { Task { await fixNotifications() } } label: { Label("Turn On Notifications", systemImage: "bell.badge") }
+                }
+            } header: { Text("Alerts") } footer: { Text(notificationStatus == .denied ? (isMac ? "Notifications are off for Relay in System Settings → Notifications → Relay. Turn on Allow Notifications to get banners for calls, messages, and sign-in codes." : "Notifications are off for Relay in iOS Settings. Turn them on to get banners for calls, messages, and sign-in codes.") : "Sign-in code texts have a Copy Code button on their banner.") } }
             if show(.ringOn) { Section {
                 Toggle(isOn: binding(\.receiveMobile)) { Label(isMac ? "iPhone" : "This iPhone", systemImage: "iphone") }
                 Toggle(isOn: binding(\.receiveDesktop)) { Label(isMac ? "This Mac" : "Desktop App", systemImage: "laptopcomputer") }
@@ -457,11 +473,20 @@ struct SettingsView: View {
         .confirmationDialog("Sign Out of Relay?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
             Button("Sign Out", role: .destructive) { Task { await session.signOut() } }
         } message: { Text("This device stops ringing and getting notifications until you sign in again.") }
+        .task(id: scenePhase) { notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus }
         .sheet(isPresented: $showingPassword) { PasswordEditor().environmentObject(session) }
         .sheet(isPresented: $showingAddLine) { LineEditor(mode: .add).environmentObject(session) }
         .sheet(item: $editingLine) { LineEditor(mode: .rename($0)).environmentObject(session) }
     }
     private func binding(_ path: WritableKeyPath<RelaySettings, Bool>) -> Binding<Bool> { Binding(get: { session.settings[keyPath: path] }, set: { value in var next = session.settings; next[keyPath: path] = value; saving = true; Task { do { try await session.saveSettings(next) } catch { session.error = error.localizedDescription }; saving = false } }) }
+    private func fixNotifications() async {
+        if notificationStatus == .notDetermined {
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+            notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        } else if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+            await UIApplication.shared.open(url)
+        }
+    }
     private func recordGreeting() async {
         do {
             if let recording = try await greetingRecorder.toggle() { saving = true; try await session.saveVoicemailGreeting(data: recording, contentType: "audio/mp4"); saving = false }
