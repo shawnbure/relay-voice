@@ -15,12 +15,18 @@ final class RelaySession: ObservableObject {
     @Published private(set) var unreadPeers: [String: Int] = [:]
     /// Unread count per line, for the line switcher.
     @Published private(set) var unreadLines: [String: Int] = [:]
-    /// The line whose inbox, keypad caller ID and replies are in use.
+    /// The chosen number: the inbox shown when not combining numbers, and the default caller ID for new calls and messages.
     @Published private(set) var selectedLine: String? = UserDefaults.standard.string(forKey: "relay.selectedLine")
+    /// One combined inbox for every number (the default). Each conversation shows its number's icon.
+    @Published private(set) var allLinesPreferred: Bool = UserDefaults.standard.object(forKey: "relay.allLines") as? Bool ?? true
     var lines: [PhoneLine] { identity?.lines ?? [] }
     var currentLine: PhoneLine? { lines.first { $0.e164 == selectedLine } ?? lines.first }
-    /// `line=` query fragment for the current line ("" before the account loads).
-    private var lineQuery: String { currentLine.map { "line=" + ($0.e164.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? $0.e164) } ?? "" }
+    var showingAllLines: Bool { allLinesPreferred && lines.count > 1 }
+    /// Changes whenever the inbox being shown changes.
+    var inboxKey: String { showingAllLines ? "all" : currentLine?.e164 ?? "" }
+    func line(_ e164: String?) -> PhoneLine? { e164.flatMap { number in lines.first { $0.e164 == number } } }
+    /// `line=` query fragment for the inbox being shown ("line=" means every number).
+    private var lineQuery: String { showingAllLines ? "line=" : currentLine.map { "line=" + ($0.e164.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? $0.e164) } ?? "" }
     private var visiblePeer: String?
     private var displayedThrough: [String: Date] = [:]
 
@@ -42,7 +48,7 @@ final class RelaySession: ObservableObject {
     private func markRead(_ peer: String, through: Date) async {
         do {
             let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let state: UnreadState = try await RelayAPI.shared.request("/v1/conversations/read", method: "PUT", body: ReadRequest(peer: peer, through: formatter.string(from: through), line: currentLine?.e164))
+            let state: UnreadState = try await RelayAPI.shared.request("/v1/conversations/read", method: "PUT", body: ReadRequest(peer: peer, through: formatter.string(from: through), line: showingAllLines ? nil : currentLine?.e164))
             updateBadge(state)
         } catch { /* Retried when this thread reloads. Do not falsify the badge locally. */ }
     }
@@ -96,9 +102,25 @@ final class RelaySession: ObservableObject {
             else { state = .connected; if !isTransientNetworkError(error) { self.error = error.localizedDescription } }
         }
     }
+    /// Shows one combined inbox for every number.
+    func selectAllLines() async {
+        guard !showingAllLines else { return }
+        allLinesPreferred = true; UserDefaults.standard.set(true, forKey: "relay.allLines")
+        conversations = []; unreadPeers = [:]
+        activityRevision += 1
+        await refresh()
+    }
+    /// Sets the caller ID for new calls and messages. Leaves the combined inbox as it is.
+    func setDefaultLine(_ e164: String) async {
+        guard showingAllLines else { await selectLine(e164); return }
+        guard lines.contains(where: { $0.e164 == e164 }) else { return }
+        selectedLine = e164; UserDefaults.standard.set(e164, forKey: "relay.selectedLine")
+        voice.useLine(e164)
+    }
     /// Switches inbox, unread dots, replies and keypad caller ID to another of the account's numbers.
     func selectLine(_ e164: String) async {
-        guard e164 != currentLine?.e164, lines.contains(where: { $0.e164 == e164 }) else { return }
+        guard e164 != currentLine?.e164 || showingAllLines, lines.contains(where: { $0.e164 == e164 }) else { return }
+        allLinesPreferred = false; UserDefaults.standard.set(false, forKey: "relay.allLines")
         selectedLine = e164; UserDefaults.standard.set(e164, forKey: "relay.selectedLine")
         conversations = []; unreadPeers = [:]
         voice.useLine(e164)
@@ -144,8 +166,8 @@ final class RelaySession: ObservableObject {
     func changePassword(_ password: String) async throws {
         let _: EmptyResponse = try await RelayAPI.shared.request("/v1/settings/password", method: "PUT", body: PasswordRequest(password: password))
     }
-    func renameLine(e164: String, label: String) async throws {
-        let _: EmptyResponse = try await RelayAPI.shared.request("/v1/phone-numbers/label", method: "PUT", body: AddLineRequest(e164: e164, label: label))
+    func renameLine(e164: String, label: String, icon: String?) async throws {
+        let _: EmptyResponse = try await RelayAPI.shared.request("/v1/phone-numbers/label", method: "PUT", body: LineUpdateRequest(e164: e164, label: label, icon: icon ?? ""))
         await refresh()
     }
     func resume() async {
@@ -180,9 +202,10 @@ final class RelaySession: ObservableObject {
         activityRevision += 1
     }
     func isMuted(_ peer: String) -> Bool { conversations.first(where: { $0.peer == peer })?.muted == true }
-    func send(to: String, text: String, attachment: OutgoingAttachment? = nil) async throws {
+    /// Sends from `from` (the conversation's own number) or, for a new conversation, the default number.
+    func send(to: String, from: String? = nil, text: String, attachment: OutgoingAttachment? = nil) async throws {
         let encoded = attachment.map { MessageAttachmentRequest(name: $0.name, contentType: $0.contentType, base64: $0.data.base64EncodedString()) }
-        let _: EmptyResponse = try await RelayAPI.shared.request("/v1/messages", method: "POST", body: MessageRequest(to: to, from: currentLine?.e164, text: text, attachment: encoded))
+        let _: EmptyResponse = try await RelayAPI.shared.request("/v1/messages", method: "POST", body: MessageRequest(to: to, from: line(from)?.e164 ?? currentLine?.e164, text: text, attachment: encoded))
     }
     func deleteMessage(id: String) async throws { let _: EmptyResponse = try await RelayAPI.shared.request("/v1/messages/\(id)", method: "DELETE") }
     func deleteConversation(peer: String) async throws {
@@ -233,6 +256,7 @@ private struct PasskeySignInRequest: Encodable { let challengeId: String; let cr
 private struct PasswordRequest: Encodable { let password: String }
 private struct SignOutRequest: Encodable { let installationId: String? }
 private struct AddLineRequest: Encodable { let e164: String; let label: String }
+private struct LineUpdateRequest: Encodable { let e164: String; let label: String; let icon: String }
 private struct EmptyResponse: Decodable {}
 private struct ArchiveRequest: Encodable { let peer: String; let archived: Bool }
 private struct MuteRequest: Encodable { let peer: String; let muted: Bool }

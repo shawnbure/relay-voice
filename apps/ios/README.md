@@ -36,7 +36,7 @@ The repository contains no Apple team ID, Relay deployment URL, mobile token, Te
 
 ## Multiple numbers
 
-A workspace can have several numbers ("lines"). Owners add numbers already in the Telnyx account from Settings → Phone Numbers (`POST /v1/admin/phone-number`), optionally with a label. Each line has its own inbox: the conversation title switches lines, and conversations, unread dots, replies, and keypad caller ID follow the selected line (API `line=` query parameter / `from` field). The app badge counts every line. Apply API migrations `0014_multiple_lines.sql` and `0015_ring_on_desktop.sql`.
+A workspace can have several numbers ("lines"). Owners add numbers already in the Telnyx account from Settings → Phone Numbers (`POST /v1/admin/phone-number`), optionally with a label. By default the app shows **All Numbers**, one combined inbox where each conversation and voicemail carries its number's icon (chosen in Settings → Phone Numbers; `PUT /v1/phone-numbers/label` with `icon`). The conversation title switches between All Numbers and a single number. Replies and call-backs always use the conversation's own number; the keypad's From menu sets the default caller ID for new conversations (API `line=` query parameter, empty for all numbers, and `from` field). The app badge counts every line. Apply API migrations `0014_multiple_lines.sql`, `0015_ring_on_desktop.sql`, and `0016_line_icons.sql`.
 
 ## Mac
 

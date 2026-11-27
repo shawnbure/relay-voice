@@ -212,7 +212,7 @@ private struct VoicemailTab: View {
                 }
             }
             .navigationSplitViewStyle(.balanced)
-            .onChange(of: session.currentLine?.e164) { selectedPeer = nil }
+            .onChange(of: session.inboxKey) { selectedPeer = nil }
         } else {
             NavigationStack { VoicemailsView(openConversation: openConversation) }
         }
@@ -263,12 +263,12 @@ private struct ConversationsView: View {
             ForEach(conversations) { conversation in
             HStack(spacing: 12) {
                 Circle().fill(session.isUnread(conversation) ? Color.blue : Color.clear).frame(width: 10, height: 10).accessibilityHidden(!session.isUnread(conversation)).accessibilityLabel("Unread")
-                Button { if conversation.kind == .message { path = [.message(named(conversation))] } else { voice.start(number: conversation.peer) } } label: {
+                Button { if conversation.kind == .message { path = [.message(named(conversation))] } else { voice.start(number: conversation.peer, from: conversation.line) } } label: {
                     Circle().fill(relayGreen.opacity(0.48)).frame(width: 48, height: 48).overlay(Image(systemName: conversation.kind == .message ? "message.fill" : "phone.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(relayInk))
                 }.buttonStyle(.plain).disabled(conversation.kind != .message && !voice.canStartCall).accessibilityLabel(conversation.kind == .message ? "Message \(conversation.peer.displayPhone)" : "Call \(conversation.peer.displayPhone)")
                 Button { path = [.history(named(conversation))] } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack { Text(displayName(for: conversation)).font(.headline.weight(session.isUnread(conversation) ? .heavy : .semibold)).foregroundStyle(.primary).lineLimit(1); if conversation.muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Notifications silenced") }; Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                        HStack(spacing: 6) { if session.showingAllLines { LineBadge(e164: conversation.line) }; Text(displayName(for: conversation)).font(.headline.weight(session.isUnread(conversation) ? .heavy : .semibold)).foregroundStyle(.primary).lineLimit(1); if conversation.muted { Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Notifications silenced") }; Spacer(); Text(conversation.occurredAt, format: .dateTime.month(.abbreviated).day().hour().minute()).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         Label(conversation.body.isEmpty ? conversation.kind.summary : conversation.body, systemImage: conversation.kind.icon).font(.subheadline.weight(session.isUnread(conversation) ? .semibold : .regular)).foregroundStyle(session.isUnread(conversation) ? Color.primary : Color.secondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityHint("Opens complete communication history")
@@ -347,23 +347,29 @@ private struct LineTitle: View {
         let lines = session.lines
         if lines.count > 1 {
             Menu {
+                Button { Task { await session.selectAllLines() } } label: {
+                    Label(session.unreadCount > 0 ? "All Numbers (\(session.unreadCount))" : "All Numbers", systemImage: session.showingAllLines ? "checkmark" : "tray.2")
+                }
+                Divider()
                 ForEach(lines) { line in
                     Button { Task { await session.selectLine(line.e164) } } label: {
                         let unread = session.unreadLines[line.e164] ?? 0
-                        Label(unread > 0 ? "\(line.name) (\(unread))" : line.name, systemImage: line.e164 == session.currentLine?.e164 ? "checkmark" : "phone")
+                        Label(unread > 0 ? "\(line.name) (\(unread))" : line.name, systemImage: !session.showingAllLines && line.e164 == session.currentLine?.e164 ? "checkmark" : (line.icon ?? "phone"))
                     }
                 }
             } label: {
                 HStack(spacing: 6) {
+                    if !session.showingAllLines, let line = session.currentLine { LineBadge(e164: line.e164, size: 26) }
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(session.currentLine?.name ?? "Conversations").font(.title2.bold()).foregroundStyle(Color.primary)
-                        if session.currentLine?.label != nil { Text(session.currentLine?.e164.displayPhone ?? "").font(.caption).foregroundStyle(.secondary) }
+                        Text(session.showingAllLines ? "All Numbers" : session.currentLine?.name ?? "Conversations").font(.title2.bold()).foregroundStyle(Color.primary)
+                        if session.showingAllLines { Text("\(lines.count) numbers").font(.caption).foregroundStyle(.secondary) }
+                        else if session.currentLine?.label != nil { Text(session.currentLine?.e164.displayPhone ?? "").font(.caption).foregroundStyle(.secondary) }
                     }
                     Image(systemName: "chevron.down").font(.subheadline.weight(.bold)).foregroundStyle(.secondary)
-                    // A dot when another line has unread activity.
-                    if lines.contains(where: { $0.e164 != session.currentLine?.e164 && (session.unreadLines[$0.e164] ?? 0) > 0 }) { Circle().fill(Color.blue).frame(width: 8, height: 8).accessibilityLabel("Another line has unread activity") }
+                    // A dot when another number has unread activity.
+                    if !session.showingAllLines, lines.contains(where: { $0.e164 != session.currentLine?.e164 && (session.unreadLines[$0.e164] ?? 0) > 0 }) { Circle().fill(Color.blue).frame(width: 8, height: 8).accessibilityLabel("Another number has unread activity") }
                 }
-            }.accessibilityLabel("Switch line, current \(session.currentLine?.name ?? "")")
+            }.accessibilityLabel(session.showingAllLines ? "Switch number, showing all numbers" : "Switch number, current \(session.currentLine?.name ?? "")")
         } else {
             Text(session.currentLine?.e164.displayPhone ?? "Conversations").font(.title2.bold())
         }
@@ -429,7 +435,7 @@ private struct ThreadView: View {
                 }
             }
             MessageComposer(draft: $draft, attachment: $attachment, photoItem: $photoItem, showingCamera: $showingCamera, showingFiles: $showingFiles, sending: sending, recording: recorder.isRecording, focused: $composerFocused, onRecord: recordAudio, onSend: send)
-        }.onDisappear { session.setVisiblePeer(nil) }.navigationTitle(conversation.displayName == conversation.peer ? conversation.peer.displayPhone : conversation.displayName).navigationBarTitleDisplayMode(.inline).toolbar(.visible, for: .navigationBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { voice.start(number: conversation.peer) } label: { Image(systemName: "phone.fill") }.disabled(!voice.canStartCall).accessibilityLabel("Call") } }.task { await load(); if startComposing { composerFocused = true } }.onChange(of: session.activityRevision) { _, _ in Task { await load() } }.onChange(of: photoItem) { _, item in Task { await loadPhoto(item) } }.sheet(isPresented: $showingCamera) { CameraPicker { image in if let data = image.jpegData(compressionQuality: 0.82) { attachment = OutgoingAttachment(name: "photo.jpg", contentType: "image/jpeg", data: data) } } }.fileImporter(isPresented: $showingFiles, allowedContentTypes: [.image, .audio, .movie, .pdf]) { result in loadFile(result) }
+        }.onDisappear { session.setVisiblePeer(nil) }.navigationTitle(conversation.displayName == conversation.peer ? conversation.peer.displayPhone : conversation.displayName).navigationBarTitleDisplayMode(.inline).toolbar(.visible, for: .navigationBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { voice.start(number: conversation.peer, from: conversation.line) } label: { Image(systemName: "phone.fill") }.disabled(!voice.canStartCall).accessibilityLabel("Call") } }.task { await load(); if startComposing { composerFocused = true } }.onChange(of: session.activityRevision) { _, _ in Task { await load() } }.onChange(of: photoItem) { _, item in Task { await loadPhoto(item) } }.sheet(isPresented: $showingCamera) { CameraPicker { image in if let data = image.jpegData(compressionQuality: 0.82) { attachment = OutgoingAttachment(name: "photo.jpg", contentType: "image/jpeg", data: data) } } }.fileImporter(isPresented: $showingFiles, allowedContentTypes: [.image, .audio, .movie, .pdf]) { result in loadFile(result) }
     }
     private func load() async { do { activity = try await session.activity(peer: conversation.peer); session.setVisiblePeer(conversation.peer) } catch { session.error = error.localizedDescription } }
     private func send() {
@@ -446,7 +452,7 @@ private struct ThreadView: View {
         let pending = ActivityItem(id: "pending-\(UUID().uuidString)", kind: .message, direction: "outbound", body: text, status: "sending", occurredAt: .now, deliveredAt: nil, media: [], durationSeconds: nil)
         activity.append(pending)
         Task {
-            do { try await session.send(to: conversation.peer, text: text, attachment: outgoingAttachment); await load() }
+            do { try await session.send(to: conversation.peer, from: conversation.line, text: text, attachment: outgoingAttachment); await load() }
             catch {
                 activity.removeAll { $0.id == pending.id }
                 session.error = error.localizedDescription
@@ -574,17 +580,17 @@ private struct VoicemailsView: View {
                 else { Image(systemName: "hourglass").foregroundStyle(.secondary).frame(width: 36).accessibilityLabel("Still processing") }
                 Button { openConversation(item.peer) } label: {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(name(item)).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                        HStack(spacing: 6) { if session.showingAllLines { LineBadge(e164: item.line) }; Text(name(item)).font(.headline).foregroundStyle(.primary).lineLimit(1) }
                         Text([item.occurredAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()), item.durationSeconds.map(formatDuration)].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityHint("Opens the conversation")
-                Button { voice.start(number: item.peer) } label: { Image(systemName: "phone.fill") }.buttonStyle(.borderless).disabled(!voice.canStartCall).accessibilityLabel("Call back")
+                Button { voice.start(number: item.peer, from: item.line) } label: { Image(systemName: "phone.fill") }.buttonStyle(.borderless).disabled(!voice.canStartCall).accessibilityLabel("Call back")
             }.padding(.vertical, 4).listRowBackground(selectedPeer == item.peer ? relayGreen.opacity(0.22) : Color.clear)
         }
         .navigationTitle("Voicemail")
         .overlay { if loaded && items.isEmpty { ContentUnavailableView("No Voicemail", systemImage: "recordingtape", description: Text("Messages callers leave on this number appear here.")) } }
         .refreshable { await load() }
-        .task(id: session.currentLine?.e164) { await load() }
+        .task(id: session.inboxKey) { await load() }
         .task { contactNames = await loadLocalContactNames() }
     }
     private func name(_ item: VoicemailItem) -> String { item.displayName ?? contactNames[item.peer] ?? item.peer.displayPhone }
@@ -710,7 +716,7 @@ private struct NewConversationView: View {
                 } else {
                     Label("Message", systemImage: "message.fill").frame(maxWidth: .infinity).frame(height: 50).foregroundStyle(.secondary).background(Color(.tertiarySystemFill)).clipShape(RoundedRectangle(cornerRadius: 13))
                 }
-                Button { if let destination { voice.start(number: destination) } } label: { Label("Call", systemImage: "phone.fill").frame(maxWidth: .infinity).frame(height: 50) }.buttonStyle(.borderedProminent).tint(relayGreen).foregroundStyle(relayInk).disabled(destination == nil || !voice.canStartCall)
+                Button { if let destination { voice.start(number: destination, from: session.currentLine?.e164) } } label: { Label("Call", systemImage: "phone.fill").frame(maxWidth: .infinity).frame(height: 50) }.buttonStyle(.borderedProminent).tint(relayGreen).foregroundStyle(relayInk).disabled(destination == nil || !voice.canStartCall)
             }.padding(.horizontal).padding(.vertical, 10).background(.bar)
         }
         .navigationTitle("New").toolbar(.visible, for: .navigationBar)

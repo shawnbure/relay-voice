@@ -29,6 +29,23 @@ struct KeypadTab: View {
     }
 }
 
+/// A number's icon, shown on conversations and voicemail in the combined inbox. Numbers without a chosen
+/// icon get a numbered circle by position.
+struct LineBadge: View {
+    @EnvironmentObject private var session: RelaySession
+    let e164: String?
+    var size: CGFloat = 18
+    var body: some View {
+        if let line = session.line(e164) {
+            let index = (session.lines.firstIndex(of: line) ?? 0) + 1
+            let symbol = line.icon ?? (index <= 50 ? "\(index).circle.fill" : "phone.circle.fill")
+            Image(systemName: symbol).font(.system(size: size * 0.62, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: size, height: size).background(line.icon.map(LineIcon.color) ?? .gray).clipShape(Circle())
+                .accessibilityLabel("On \(line.name)")
+        }
+    }
+}
+
 struct ContactEntry: Identifiable, Hashable {
     let id: String; let name: String; let number: String; let label: String
 }
@@ -36,6 +53,7 @@ struct ContactEntry: Identifiable, Hashable {
 /// The device's contacts, one row per phone number, each with Call and Message buttons.
 struct ContactsListView: View {
     let onMessage: (String) -> Void
+    @EnvironmentObject private var session: RelaySession
     @EnvironmentObject private var voice: VoiceManager
     @State private var entries: [ContactEntry] = []
     @State private var query = ""
@@ -62,7 +80,7 @@ struct ContactsListView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     Button { onMessage(entry.number) } label: { Image(systemName: "message.fill").frame(width: 34, height: 34).background(relayGreen.opacity(0.35)).clipShape(Circle()) }
                         .buttonStyle(.plain).accessibilityLabel("Message \(entry.name)")
-                    Button { voice.start(number: entry.number) } label: { Image(systemName: "phone.fill").frame(width: 34, height: 34).background(Color.green.opacity(0.35)).clipShape(Circle()) }
+                    Button { voice.start(number: entry.number, from: session.currentLine?.e164) } label: { Image(systemName: "phone.fill").frame(width: 34, height: 34).background(Color.green.opacity(0.35)).clipShape(Circle()) }
                         .buttonStyle(.plain).disabled(!voice.canStartCall).accessibilityLabel("Call \(entry.name)")
                 }.padding(.vertical, 2)
             }
@@ -134,7 +152,7 @@ struct DialerView: View {
                     if session.lines.count > 1 && !voice.isInCall {
                         // Caller ID for calls and messages started here.
                         Menu {
-                            ForEach(session.lines) { line in Button { Task { await session.selectLine(line.e164) } } label: { Label(line.name, systemImage: line.e164 == session.currentLine?.e164 ? "checkmark" : "phone") } }
+                            ForEach(session.lines) { line in Button { Task { await session.setDefaultLine(line.e164) } } label: { Label(line.name, systemImage: line.e164 == session.currentLine?.e164 ? "checkmark" : (line.icon ?? "phone")) } }
                         } label: { Label("From \(session.currentLine?.name ?? "")", systemImage: "chevron.up.chevron.down").font(.footnote.weight(.semibold)) }
                     }
                 }.frame(height: session.lines.count > 1 ? 100 : 78).padding(.horizontal, 20)
@@ -151,7 +169,7 @@ struct DialerView: View {
                 } else {
                     HStack(spacing: 54) {
                         DialAction(title: "Message", icon: "message.fill", color: relayGreen, enabled: number.e164 != nil) { if let destination = number.e164 { onMessage(destination) } }
-                        DialAction(title: number.e164 == session.currentLine?.e164 ? "Test Call" : "Call", icon: "phone.fill", color: .green, enabled: number.e164 != nil) { voice.start(number: number) }
+                        DialAction(title: number.e164 == session.currentLine?.e164 ? "Test Call" : "Call", icon: "phone.fill", color: .green, enabled: number.e164 != nil) { voice.start(number: number, from: session.currentLine?.e164) }
                     }
                 }
                 Spacer(minLength: 18)
@@ -418,18 +436,19 @@ struct SettingsView: View {
                 ForEach(session.lines) { line in
                     Button { if session.identity?.user.role != "member" { editingLine = line } } label: {
                         HStack {
+                            LineBadge(e164: line.e164, size: 28)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(line.name).fontWeight(.semibold).foregroundStyle(Color.primary)
                                 if line.label != nil { Text(line.e164.displayPhone).font(.caption).foregroundStyle(.secondary) }
                             }
                             Spacer()
-                            if line.e164 == session.currentLine?.e164 { Text("In Use").font(.caption.weight(.semibold)).foregroundStyle(.green) }
+                            if line.e164 == session.currentLine?.e164 { Text("Default").font(.caption.weight(.semibold)).foregroundStyle(.green) }
                         }
-                    }.accessibilityHint("Rename this line")
+                    }.accessibilityHint("Change this number's label and icon")
                 }
                 if session.identity?.user.role == "owner" { Button { showingAddLine = true } label: { Label("Add Number", systemImage: "plus.circle.fill") } }
                 LabeledContent { Text(voice.status.label).foregroundStyle(voice.status == .ready ? .green : .secondary) } label: { Label("Calling", systemImage: "antenna.radiowaves.left.and.right") }
-            } header: { Text("Phone Numbers") } footer: { Text(session.lines.count > 1 ? "Switch numbers from the title at the top of Conversations. Each number has its own inbox." : "Add numbers you already own in Telnyx to use them in Relay.") } }
+            } header: { Text("Phone Numbers") } footer: { Text(session.lines.count > 1 ? "Tap a number to change its label and icon. The icon marks its conversations in All Numbers. Default is the caller ID for new calls and messages." : "Add numbers you already own in Telnyx to use them in Relay.") } }
             if show(.ringOn) { Section {
                 LabeledContent {
                     switch notificationStatus {
@@ -578,6 +597,7 @@ private struct LineEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var number = ""
     @State private var label = ""
+    @State private var icon: String?
     @State private var working = false
     @State private var message: String?
     private var isAdding: Bool { if case .add = mode { return true }; return false }
@@ -590,16 +610,29 @@ private struct LineEditor: View {
                     Section { TextField("Phone Number", text: $number).keyboardType(.phonePad).textContentType(.telephoneNumber) } footer: { Text("Use a number already in your Telnyx account. Relay sets it up for texts and calls; nothing is purchased.") }
                 }
                 Section { TextField("Label (Optional)", text: $label) } footer: { Text("For example Work or Personal. Shown in the line switcher and on alerts.") }
+                if !isAdding {
+                    Section {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 6), spacing: 10) {
+                            ForEach(LineIcon.choices, id: \.symbol) { choice in
+                                Button { icon = icon == choice.symbol ? nil : choice.symbol } label: {
+                                    Image(systemName: choice.symbol).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                                        .frame(width: 40, height: 40).background(choice.color).clipShape(Circle())
+                                        .overlay(Circle().stroke(Color.primary, lineWidth: icon == choice.symbol ? 3 : 0).padding(-4))
+                                }.buttonStyle(.plain).accessibilityLabel(choice.symbol).accessibilityAddTraits(icon == choice.symbol ? .isSelected : [])
+                            }
+                        }.padding(.vertical, 6)
+                    } header: { Text("Icon") } footer: { Text("Marks this number's conversations in All Numbers. Tap the selected icon again to use a numbered circle.") }
+                }
                 if let message { Section { Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) } }
             }
-            .navigationTitle(isAdding ? "Add Number" : "Rename Line").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(isAdding ? "Add Number" : "Edit Number").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     if working { ProgressView() } else { Button(isAdding ? "Add" : "Save") { Task { await save() } }.disabled(isAdding && number.e164 == nil) }
                 }
             }
-            .task { if case .rename(let line) = mode { label = line.label ?? "" } }
+            .task { if case .rename(let line) = mode { label = line.label ?? ""; icon = line.icon } }
         }
     }
     private func save() async {
@@ -607,7 +640,7 @@ private struct LineEditor: View {
         do {
             switch mode {
             case .add: guard let e164 = number.e164 else { return }; try await session.addLine(e164: e164, label: label)
-            case .rename(let line): try await session.renameLine(e164: line.e164, label: label)
+            case .rename(let line): try await session.renameLine(e164: line.e164, label: label, icon: icon)
             }
             dismiss()
         } catch { message = error.localizedDescription }

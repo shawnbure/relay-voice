@@ -91,6 +91,8 @@ final class VoiceManager: NSObject, ObservableObject {
         reconnectTask?.cancel(); reconnectTask = nil; status = .offline
         await connect(api: api, ownNumber: ownNumber)
     }
+    /// Calls `number` with `line` as caller ID (the conversation's own number), falling back to the current one.
+    func start(number: String, from line: String?) { if let line, !line.isEmpty, call == nil { ownNumber = line }; start(number: number) }
     func start(number: String) {
         guard canStartCall, let destination = number.e164 else { return }
         remoteNumber = destination; hasCall = true; incoming = false; status = .connecting

@@ -311,7 +311,7 @@ app.post("/v1/mobile/token", async (c) => {
 app.get("/v1/me", async (c) => {
   const p = c.get("principal");
   const me = await c.env.DB.prepare(`SELECT u.id, u.email, u.display_name, t.id tenant_id, t.name tenant_name, m.role FROM users u JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.id=? AND t.id=?`).bind(p.userId, p.tenantId).first();
-  const phones = await c.env.DB.prepare("SELECT id, e164, label FROM phone_numbers WHERE tenant_id = ? ORDER BY created_at").bind(p.tenantId).all();
+  const phones = await c.env.DB.prepare("SELECT id, e164, label, icon FROM phone_numbers WHERE tenant_id = ? ORDER BY created_at").bind(p.tenantId).all();
   return c.json({ user: me, phone: phones.results[0] ?? null, phones: phones.results });
 });
 
@@ -358,8 +358,13 @@ app.post("/v1/admin/phone-number", async (c) => {
 app.put("/v1/phone-numbers/label", async (c) => {
   const principal = c.get("principal");
   if (principal.role === "member") return c.json({ error: "admin access required" }, 403);
-  const { e164 = "", label = "" } = await c.req.json<{ e164?: string; label?: string }>();
-  const result = await c.env.DB.prepare("UPDATE phone_numbers SET label=? WHERE tenant_id=? AND e164=?").bind(label.trim().slice(0, 40) || null, principal.tenantId, e164.trim()).run();
+  const body = await c.req.json<{ e164?: string; label?: string; icon?: string | null }>();
+  // Fields left out keep their saved value. An icon is an SF Symbol name.
+  if (body.icon != null && !/^[a-z0-9.]{1,40}$/.test(body.icon)) return c.json({ error: "invalid icon" }, 400);
+  const label = body.label === undefined ? undefined : body.label.trim().slice(0, 40) || null;
+  const icon = body.icon === undefined ? undefined : body.icon || null;
+  const result = await c.env.DB.prepare("UPDATE phone_numbers SET label=CASE WHEN ? THEN ? ELSE label END, icon=CASE WHEN ? THEN ? ELSE icon END WHERE tenant_id=? AND e164=?")
+    .bind(label !== undefined ? 1 : 0, label ?? null, icon !== undefined ? 1 : 0, icon ?? null, principal.tenantId, (body.e164 ?? "").trim()).run();
   if (!result.meta.changes) return c.json({ error: "line not found" }, 404);
   return c.json({ saved: true });
 });

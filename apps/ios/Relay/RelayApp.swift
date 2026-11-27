@@ -47,7 +47,7 @@ final class RelayNotifications: NSObject, UIApplicationDelegate, UNUserNotificat
         let peer = info["peer"] as? String, line = info["line"] as? String
         Task {
             // Open the thread on the line it arrived on.
-            if let line { await Self.session?.selectLine(line) }
+            if let line, Self.session?.showingAllLines != true { await Self.session?.selectLine(line) }
             Self.session?.notificationPeer = peer
             await Self.session?.resume()
         }

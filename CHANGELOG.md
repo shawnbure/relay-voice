@@ -27,8 +27,10 @@ This release turns the native client into a full app for iPhone, iPad, and Mac. 
 ### Multiple phone numbers ("lines")
 
 - Owners add numbers that are already in the Telnyx account from **Settings → Phone Numbers → Add Number**, with an optional label such as "Work". Labels can be renamed later. Relay does not buy numbers.
-- **Each number has its own inbox.** Tap the title at the top of Conversations to switch numbers. Conversations, search, unread dots, the archive, call history, and voicemail all follow the selected number. The app badge still counts every number.
-- **Replies come from the right number.** Messages are sent from the number the conversation belongs to. The Keypad has a **From** menu that chooses the caller ID for new calls and messages.
+- **All Numbers: one combined inbox (the default).** Conversations and voicemail from every number appear in a single list. Each row has a small icon that shows which number it is on.
+- **An icon for each number.** In Settings → Phone Numbers, tap a number to choose its icon from twelve colored symbols (Work, Home, and so on), and to change its label. A number without a chosen icon shows a numbered circle.
+- **Switch to a single number at any time.** Tap the title at the top of Conversations and choose **All Numbers** or one number. With one number chosen, conversations, search, unread dots, the archive, call history, and voicemail follow that number. The app badge still counts every number.
+- **Replies come from the right number.** Messages and call-backs from a conversation or voicemail use that conversation's number, even in All Numbers. The Keypad's **From** menu sets the **Default** number used as caller ID for new calls and messages, without leaving All Numbers.
 - **You can see which number was called.** When a workspace has more than one number, the incoming-call screen and notifications say "To Work" (or the number). Tapping a notification switches to the matching number before opening the conversation.
 
 ### Calls
@@ -77,8 +79,8 @@ This release turns the native client into a full app for iPhone, iPad, and Mac. 
 | `POST /v1/auth/mobile/logout` | New. Revokes the bearer token and removes that installation's push device. |
 | `GET /.well-known/apple-app-site-association` | New. Lists `<TEAM_ID>.<BUNDLE_ID>` under `webcredentials` so the app can use the site's passkeys. |
 | `GET /v1/voicemails?line=` | New. Voicemail list for one number, or all numbers. |
-| `PUT /v1/phone-numbers/label` | New. Renames a number (owner or admin). |
-| `GET /v1/me` | Now includes `phones` (`id`, `e164`, `label`). |
+| `PUT /v1/phone-numbers/label` | New. Sets a number's `label` and `icon` (an SF Symbol name). Fields left out are kept. Owner or admin. |
+| `GET /v1/me` | Now includes `phones` (`id`, `e164`, `label`, `icon`). |
 | `GET /v1/settings`, `PUT /v1/settings` | New `receiveDesktop` field. Older clients that leave it out keep the saved value. |
 | `GET /v1/conversations`, `/v1/activity`, `/v1/messages`, `/v1/calls`, `/v1/unread`, `POST /v1/conversations/read`, `DELETE /v1/conversations` | Accept `line=<E.164>`. Empty means every number. |
 | `POST /v1/messages` | Accepts `from` to choose the sending number. |
@@ -90,6 +92,7 @@ Apply these in order with `npx wrangler d1 migrations apply DB --remote`:
 
 - `0014_multiple_lines.sql` adds `phone_numbers.label` and `notification_items.line`. It assigns existing unread items to the workspace's first number.
 - `0015_ring_on_desktop.sql` adds `call_preferences.receive_desktop`, which defaults to on.
+- `0016_line_icons.sql` adds `phone_numbers.icon`.
 
 ### Operator steps
 

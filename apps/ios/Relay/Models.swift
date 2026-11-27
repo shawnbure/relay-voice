@@ -1,3 +1,4 @@
+import SwiftUI
 import Foundation
 
 struct RelayIdentity: Decodable {
@@ -14,8 +15,18 @@ struct RelayIdentity: Decodable {
 /// One of the account's own phone numbers.
 struct PhoneLine: Decodable, Identifiable, Hashable {
     var id: String { e164 }
-    let e164: String; var label: String?
+    let e164: String; var label: String?; var icon: String?
     var name: String { label.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? e164.displayPhone }
+}
+
+/// Icons a number can wear so the combined inbox shows which number each conversation is on.
+enum LineIcon {
+    static let choices: [(symbol: String, color: Color)] = [
+        ("briefcase.fill", .blue), ("house.fill", .green), ("person.fill", .orange), ("building.2.fill", .purple),
+        ("star.fill", .yellow), ("heart.fill", .pink), ("cart.fill", .teal), ("car.fill", .red),
+        ("wrench.and.screwdriver.fill", .brown), ("globe.americas.fill", .indigo), ("bolt.fill", .mint), ("leaf.fill", .cyan),
+    ]
+    static func color(_ symbol: String) -> Color { choices.first { $0.symbol == symbol }?.color ?? .gray }
 }
 
 enum ActivityKind: String, Decodable { case message, call, voicemail }
