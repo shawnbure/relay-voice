@@ -7,6 +7,9 @@ Relay is a self-hosted communications inbox and softphone built with Telnyx, Clo
 
 Built on Cloudflare Workers, Durable Objects, D1, and R2 by [workrr.ai](https://workrr.ai).
 
+> [!NOTE]
+> **Final open-source release.** Relay 1.0 is the last version published here. The code stays available under its license, but this repository won't receive further updates.
+
 > [!IMPORTANT]
 > Relay is an early-stage project, not a turnkey telephone service. Operators are responsible for their Telnyx account, messaging registration, emergency-calling obligations, abuse prevention, data retention, and regulatory compliance. Do not rely on Relay for emergency calls.
 

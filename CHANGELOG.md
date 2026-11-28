@@ -2,6 +2,10 @@
 
 Notable changes to Relay, newest first. Each entry says what changed for people using Relay, and what operators must do to deploy it.
 
+## Relay 1.0: Final Open-Source Release
+
+Relay 1.0 is the November 2026 release below, published as the last open-source version. This repository won't receive further updates.
+
 ## November 2026: Mac App, Multiple Numbers, Real Sign-In
 
 This release turns the native client into a full app for iPhone, iPad, and Mac. It adds real account sign-in, lets one workspace use several phone numbers, and fixes incoming calls on iPhone.
